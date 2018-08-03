@@ -1,14 +1,13 @@
 .globl	isPrime
 
 isPrime:
-.LFB0:
 	pushq	%rbp		# Push Base pointer to stack frame
 	movq	%rsp, %rbp	# Copy Stack pointer to Base pointer 
 	subq	$32, %rsp	# Allocate enough space to stack frame
 	movl	%edi, -20(%rbp) # Store 'num' argument in EDI
 	movl	-20(%rbp), %eax
-	movl	%eax, %edi
-	call	find_square_root
+	movl	%eax, %edi	# EDI contains the arg to function
+	call	find_square_root # Call the C function
 	movl	%eax, -4(%rbp)	# Store the return value
 	movl	$2, -8(%rbp)	# Initialize counter
 	movl	-8(%rbp), %eax	
