@@ -2,6 +2,8 @@
 #include<memory.h>
 #include<lib.h>
 
+#define osmap(a) (unsigned long *)osmap(a)
+
 void prepare_context_mm(struct exec_context *ctx)
 {
         /*  PFN of the first level translation */
@@ -18,7 +20,7 @@ void prepare_context_mm(struct exec_context *ctx)
 
         /**************** Stack Segment *******************/
 
-        unsigned long stackVA = ctx->mms[MM_SEG_STACK].start;
+        unsigned long stackVA = ctx->mms[MM_SEG_STACK].end - 1;
         /* Extract out all 4 level page offsets */
         u32 offsetL4 = ((1 << 9) - 1) & (stackVA >> 39);
         u32 offsetL3 = ((1 << 9) - 1) & (stackVA >> 30);
@@ -73,7 +75,7 @@ void prepare_context_mm(struct exec_context *ctx)
                 pfnL3_ = *(l4addr + offsetL4_) >> 12;
         else {
                 pfnL3_ = os_pfn_alloc(OS_PT_REG);
-                *(l4addr + offsetL4_) = (pfnL3_ << 12) | 7;
+                *(l4addr + offsetL4_) = (pfnL3_ << 12) | 5;
         }
 
         l3addr_ = osmap(pfnL3_);
@@ -81,7 +83,7 @@ void prepare_context_mm(struct exec_context *ctx)
                 pfnL2_ = *(l3addr_ + offsetL3_) >> 12;
         else {
                 pfnL2_ = os_pfn_alloc(OS_PT_REG);
-                *(l3addr_ + offsetL3_) = (pfnL2_ << 12) | 7;
+                *(l3addr_ + offsetL3_) = (pfnL2_ << 12) | 5;
         }
 
         l2addr_ = osmap(pfnL2_);
@@ -89,7 +91,7 @@ void prepare_context_mm(struct exec_context *ctx)
                 pfnL1_ = *(l2addr_ + offsetL2_) >> 12;
         else {
                 pfnL1_ = os_pfn_alloc(OS_PT_REG);
-                *(l2addr_ + offsetL2_) = (pfnL1_ << 12) | 7;
+                *(l2addr_ + offsetL2_) = (pfnL1_ << 12) | 5;
         }
 
         /* Final mapping to Data Physical Page */
@@ -98,7 +100,7 @@ void prepare_context_mm(struct exec_context *ctx)
                 dataPFN_ = *(l1addr_ + offsetL1_) >> 12;
         else {
                 dataPFN_ = os_pfn_alloc(USER_REG);
-                *(l1addr_ + offsetL1_) = (dataPFN_ << 12) | 7;
+                *(l1addr_ + offsetL1_) = (dataPFN_ << 12) | 5;
         }
 
 
@@ -145,17 +147,6 @@ void prepare_context_mm(struct exec_context *ctx)
         else
                 *(l1addr_d + offsetL1_d) = (ctx->arg_pfn << 12) | 7;
 
-
-        /************************* DEBUG ************************/
-        // Debug
-        // u32 a = ctx->mms[MM_SEG_STACK].access_flags;
-        // printf("%x\n", a);
-        // unsigned long b = ctx->mms[MM_SEG_STACK].end;
-        printf("%x %x %x\n", *(l4addr + offsetL4), *(l4addr + offsetL4_) & 1, (pfnL3 << 12) | 7);
-        printf("%x %x %x\n", *(l2addr_ + offsetL2_), *(l4addr + offsetL4_) & 1, (pfnL1_ << 12) | 7);
-        printf("%x %d %d\n", l2addr, offsetL2, pfnL2);
-        printf("%x %d %d\n", l1addr, offsetL1, pfnL1);
-
         return;
 }
 
@@ -169,11 +160,11 @@ void cleanup_context_mm(struct exec_context *ctx)
 
         u32 pfnL1, pfnL2, pfnL3, dataPFN;
         u32 pfnL1_, pfnL2_, pfnL3_, dataPFN_;
-        u32 pfnL1_d, pfnL2_d, pfnL3_d;
+        u32 pfnL1_d, pfnL2_d, pfnL3_d, dataPFN_d;
 
         /**************** Stack Segment *******************/
 
-        unsigned long stackVA = ctx->mms[MM_SEG_STACK].start;
+        unsigned long stackVA = ctx->mms[MM_SEG_STACK].end - 1;
         /* Extract out all 4 level page offsets */
         u32 offsetL4 = ((1 << 9) - 1) & (stackVA >> 39);
         u32 offsetL3 = ((1 << 9) - 1) & (stackVA >> 30);
@@ -267,7 +258,10 @@ void cleanup_context_mm(struct exec_context *ctx)
                 os_pfn_free(OS_PT_REG, pfnL1_d);
         }
 
-        /* Since I didn't allocate a physical frame for data page */
-        /* I'll not clean it up (ctx->arg_pfn was provided to us) */
+        if (*(l1addr_d + offsetL1_d) & 1) {
+                dataPFN_d = *(l1addr_d + offsetL1_d) >> 12;
+                os_pfn_free(USER_REG, dataPFN_d);
+        }
+
         return;
 }
