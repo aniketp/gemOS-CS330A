@@ -24,10 +24,10 @@ enum{
 #define MM_SH 0x8
 
 
-#define CODE_START       0x100000000  
+#define CODE_START       0x100000000
 #define RODATA_START     0x140000000
 #define DATA_START       0x180000000
-#define STACK_START      0x800000000 
+#define STACK_START      0x800000000
 
 
 
@@ -37,7 +37,7 @@ enum{
 struct mm_segment{
                    unsigned long start;
                    unsigned long end;
-                   u32 access_flags;   /*R=1, W=2, X=4, S=8*/ 
+                   u32 access_flags;   /*R=1, W=2, X=4, S=8*/
 };
 
 struct exec_context{

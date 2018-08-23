@@ -175,26 +175,26 @@ void cleanup_context_mm(struct exec_context *ctx)
         if (*(l4addr + offsetL4) & 1) {
                 pfnL3 = *(l4addr + offsetL4) >> 12;
                 l3addr = osmap(pfnL3);
-                os_pfn_free(OS_PT_REG, pfnL3);
         }
 
         if (*(l3addr + offsetL3) & 1) {
                 pfnL2 = *(l3addr + offsetL3) >> 12;
                 l2addr = osmap(pfnL2);
-                os_pfn_free(OS_PT_REG, pfnL2);
+                os_pfn_free(OS_PT_REG, pfnL3);
         }
 
         if (*(l2addr + offsetL2) & 1) {
                 pfnL1 = *(l2addr + offsetL2) >> 12;
                 l1addr = osmap(pfnL1);
-                os_pfn_free(OS_PT_REG, pfnL1);
+                os_pfn_free(OS_PT_REG, pfnL2);
         }
 
         if (*(l1addr + offsetL1) & 1) {
                 dataPFN = *(l1addr + offsetL1) >> 12;
-                os_pfn_free(USER_REG, dataPFN);
+                os_pfn_free(OS_PT_REG, pfnL1);
         }
 
+        os_pfn_free(USER_REG, dataPFN);
 
         /**************** Code Segment *******************/
 
@@ -209,26 +209,25 @@ void cleanup_context_mm(struct exec_context *ctx)
         if (*(l4addr + offsetL4_) & 1) {
                 pfnL3_ = *(l4addr + offsetL4_) >> 12;
                 l3addr_ = osmap(pfnL3_);
-                os_pfn_free(OS_PT_REG, pfnL3_);
         }
 
         if (*(l3addr_ + offsetL3_) & 1) {
                 pfnL2_ = *(l3addr_ + offsetL3_) >> 12;
                 l2addr_ = osmap(pfnL2_);
-                os_pfn_free(OS_PT_REG, pfnL2_);
         }
 
         if (*(l2addr_ + offsetL2_) & 1) {
                 pfnL1_ = *(l2addr_ + offsetL2_) >> 12;
                 l1addr_ = osmap(pfnL1_);
-                os_pfn_free(OS_PT_REG, pfnL1_);
+                os_pfn_free(OS_PT_REG, pfnL2_);
         }
 
         if (*(l1addr_ + offsetL1_) & 1) {
                 dataPFN_ = *(l1addr_ + offsetL1_) >> 12;
-                os_pfn_free(USER_REG, dataPFN_);
+                os_pfn_free(OS_PT_REG, pfnL1_);
         }
 
+        os_pfn_free(USER_REG, dataPFN_);
 
         /**************** Data Segment *******************/
 
@@ -243,25 +242,26 @@ void cleanup_context_mm(struct exec_context *ctx)
         if (*(l4addr + offsetL4_d) & 1) {
                 pfnL3_d = *(l4addr + offsetL4_d) >> 12;
                 l3addr_d = osmap(pfnL3_d);
-                os_pfn_free(OS_PT_REG, pfnL3_d);
         }
 
         if (*(l3addr_d + offsetL3_d) & 1) {
                 pfnL2_d = *(l3addr_d + offsetL3_d) >> 12;
                 l2addr_d = osmap(pfnL2_d);
-                os_pfn_free(OS_PT_REG, pfnL2_d);
+                os_pfn_free(OS_PT_REG, pfnL3_d);
         }
 
         if (*(l2addr_d + offsetL2_d) & 1) {
                 pfnL1_d = *(l2addr_d + offsetL2_d) >> 12;
                 l1addr_d = osmap(pfnL1_d);
-                os_pfn_free(OS_PT_REG, pfnL1_d);
+                os_pfn_free(OS_PT_REG, pfnL2_d);
         }
 
         if (*(l1addr_d + offsetL1_d) & 1) {
                 dataPFN_d = *(l1addr_d + offsetL1_d) >> 12;
-                os_pfn_free(USER_REG, dataPFN_d);
+                os_pfn_free(OS_PT_REG, pfnL1_d);
         }
+
+        os_pfn_free(USER_REG, dataPFN_d);
 
         return;
 }
