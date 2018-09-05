@@ -3,6 +3,14 @@
 #include<context.h>
 #include<memory.h>
 
+#define osmap(a)        (unsigned long *) osmap(a)
+
+#define PToffset       0x1FF             /* (1 << 9) - 1 : PT offset size */
+#define L4offset       0x027             /* L4 Offset : 39-48 bits */
+#define L3offset       0x01E             /* L3 Offset : 30-39 bits */
+#define L2offset       0x015             /* L2 Offset : 21-30 bits */
+#define L1offset       0x00C             /* L1 Offset : 12-21 bits */
+#define PTEoffset      0x00C             /* PFN is at an offset of 12 in PTE */
 
 /*System Call handler*/
 int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
@@ -24,12 +32,53 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 		unsigned long code_start = current->mms[MM_SEG_CODE].start;
 		unsigned long code_end = current->mms[MM_SEG_CODE].end;
 
+		// Check for proper VA to PA mapping
+		unsigned long address = (unsigned long) param1;
+		unsigned long *l4addr = osmap(current->pgd);
+		unsigned long *l3addr, *l2addr, *l1addr;
+
+		u32 offsetL4, offsetL3, offsetL2, offsetL1;
+		u32 pfnL1, pfnL2, pfnL3;
+
+		/* Extract out all 4 level page offsets */
+		offsetL4 = PToffset & (address >> 39);
+		offsetL3 = PToffset & (address >> 30);
+		offsetL2 = PToffset & (address >> 21);
+		offsetL1 = PToffset & (address >> 12);
+
+
+		/* Check Proper PT Mapping and exit if Page Fault occurs */
+		if ((*(l4addr + offsetL4) & 1) == 0)
+			return -1;
+		else {
+			pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+			l3addr = osmap(pfnL3);
+		}
+
+		if ((*(l3addr + offsetL3) & 1) == 0)
+			return -1;
+		else {
+			pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+			l2addr = osmap(pfnL2);
+		}
+
+		if ((*(l2addr + offsetL2) & 1) == 0)
+			return -1;
+		else {
+			pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+			l1addr = osmap(pfnL1);
+		}
+
+		if ((*(l1addr + offsetL1) & 1) == 0)
+			return -1;
+
+
 		// Check whether buff data is not invalid address mapping
-		if (param1 > code_end || param1 < code_start)
+		if (param1 > code_end && param1 < code_start)
 			return -1;
 
 		// Same sanity check for buff + len - 1
-		if (param1 + param2 - 1 > code_end ||
+		if (param1 + param2 - 1 > code_end &&
 			param1 + param2 - 1 < code_start)
 			return -1;
 
@@ -120,8 +169,14 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 
 extern int handle_div_by_zero(void)
 {
-	struct exec_context *current = get_current_ctx();
-	printf("Div-by-zero detected at %x\n", current->os_stack_pfn);
+	unsigned long stackptr;
+	asm volatile(
+	     "mov 8(%%rsp), %0"
+	     :"=r" (stackptr)
+	     :
+	     :"memory"
+	);
+	printf("Div-by-zero detected at %x\n", stackptr);
 	do_exit();
 }
 
