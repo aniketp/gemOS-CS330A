@@ -12,6 +12,10 @@
 #define L1offset       0x00C             /* L1 Offset : 12-21 bits */
 #define PTEoffset      0x00C             /* PFN is at an offset of 12 in PTE */
 
+#define pr             0x001             /* Present Bit */
+#define rw             0x002             /* Write Bit: Not for Code Segment */
+#define us             0x004             /* User Mode */
+
 /*System Call handler*/
 int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 {
@@ -33,44 +37,44 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 		unsigned long stack_end = current->mms[MM_SEG_STACK].end;
 
 		// Check for proper VA to PA mapping
-		// unsigned long address = (unsigned long) param1;
-		// unsigned long *l4addr = osmap(current->pgd);
-		// unsigned long *l3addr, *l2addr, *l1addr;
-		//
-		// u32 offsetL4, offsetL3, offsetL2, offsetL1;
-		// u32 pfnL1, pfnL2, pfnL3;
-		//
-		// /* Extract out all 4 level page offsets */
-		// offsetL4 = PToffset & (address >> 39);
-		// offsetL3 = PToffset & (address >> 30);
-		// offsetL2 = PToffset & (address >> 21);
-		// offsetL1 = PToffset & (address >> 12);
-		//
-		//
-		// /* Check Proper PT Mapping and exit if Page Fault occurs */
-		// if ((*(l4addr + offsetL4) & 1) == 0)
-		// 	return -1;
-		// else {
-		// 	pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
-		// 	l3addr = osmap(pfnL3);
-		// }
-		//
-		// if ((*(l3addr + offsetL3) & 1) == 0)
-		// 	return -1;
-		// else {
-		// 	pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
-		// 	l2addr = osmap(pfnL2);
-		// }
-		//
-		// if ((*(l2addr + offsetL2) & 1) == 0)
-		// 	return -1;
-		// else {
-		// 	pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
-		// 	l1addr = osmap(pfnL1);
-		// }
-		//
-		// if ((*(l1addr + offsetL1) & 1) == 0)
-		// 	return -1;
+		unsigned long address = (unsigned long) param1;
+		unsigned long *l4addr = osmap(current->pgd);
+		unsigned long *l3addr, *l2addr, *l1addr;
+
+		u32 offsetL4, offsetL3, offsetL2, offsetL1;
+		u32 pfnL1, pfnL2, pfnL3;
+
+		/* Extract out all 4 level page offsets */
+		offsetL4 = PToffset & (address >> L4offset);
+		offsetL3 = PToffset & (address >> L3offset);
+		offsetL2 = PToffset & (address >> L2offset);
+		offsetL1 = PToffset & (address >> L1offset);
+
+
+		/* Check Proper PT Mapping and exit if Page Fault occurs */
+		if ((*(l4addr + offsetL4) & 1) == 0)
+			return -1;
+		else {
+			pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+			l3addr = osmap(pfnL3);
+		}
+
+		if ((*(l3addr + offsetL3) & 1) == 0)
+			return -1;
+		else {
+			pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+			l2addr = osmap(pfnL2);
+		}
+
+		if ((*(l2addr + offsetL2) & 1) == 0)
+			return -1;
+		else {
+			pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+			l1addr = osmap(pfnL1);
+		}
+
+		if ((*(l1addr + offsetL1) & 1) == 0)
+			return -1;
 
 
 		// Check whether buff data is not invalid address mapping
@@ -183,9 +187,8 @@ extern int handle_div_by_zero(void)
 
 extern int handle_page_fault(void)
 {
-	unsigned long fault;
-	unsigned long *apple;
-    	asm volatile(
+	unsigned long fault, *baseptr;
+	asm volatile(
     	     "mov %%cr2, %0"
     	     :"=r" (fault)
     	     :
@@ -194,12 +197,10 @@ extern int handle_page_fault(void)
 
 	asm volatile(
     	     "mov %%rbp, %0"
-    	     :"=r" (apple)
+    	     :"=r" (baseptr)
     	     :
     	     :"memory"
     	);
-
-	printf("%x\n", *(apple + 3));
 
 	struct exec_context *current = get_current_ctx();
 
@@ -215,8 +216,23 @@ extern int handle_page_fault(void)
 	unsigned long stack_end = current->mms[MM_SEG_STACK].end;
 	unsigned long stack_start = current->mms[MM_SEG_STACK].start;
 
+	// Reuse this
+	unsigned long address = fault;
+	unsigned long *l4addr = osmap(current->pgd);
+	unsigned long *l3addr, *l2addr, *l1addr;
 
-	// If the accessed address is in DATA Segment
+	u32 offsetL4, offsetL3, offsetL2, offsetL1;
+	u32 pfnL1, pfnL2, pfnL3, dataPFN;
+
+	/* Extract out all 4 level page offsets */
+	offsetL4 = PToffset & (address >> L4offset);
+	offsetL3 = PToffset & (address >> L3offset);
+	offsetL2 = PToffset & (address >> L2offset);
+	offsetL1 = PToffset & (address >> L1offset);
+
+
+	/**************** Data Segment *******************/
+
 	if (fault <= data_end && fault >= data_start) {
 		if (fault > data_next) {
 			printf("Virtual address not b/w Data start and next_free\n");
@@ -224,12 +240,47 @@ extern int handle_page_fault(void)
 			do_exit();
 		}
 		else {
-			// createPt(fault, "data") // Convert to number
+
+	/* Fill up Page Table Pages entries */
+        if (*(l4addr + offsetL4) & 1)        // If PT already present
+                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+        else {
+                pfnL3 = os_pfn_alloc(OS_PT_REG);
+                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | rw | us);
+        }
+
+        l3addr = osmap(pfnL3);
+        if (*(l3addr + offsetL3) & 1)        // If PT already present
+                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+        else {
+                pfnL2 = os_pfn_alloc(OS_PT_REG);
+                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | rw | us);
+        }
+
+        l2addr = osmap(pfnL2);
+        if (*(l2addr + offsetL2) & 1)        // If PT already present
+                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+        else {
+                pfnL1 = os_pfn_alloc(OS_PT_REG);
+                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | rw | us);
+        }
+
+        /* Final mapping to Data Physical Page */
+        l1addr = osmap(pfnL1);
+        if (*(l1addr + offsetL1) & 1)        // If PT already present
+                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+        else {
+                dataPFN = os_pfn_alloc(USER_REG);
+                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
+        }
+
 			// TODO: iretq instruction
 		}
 	}
 
-	// If the accessed address is in RODATA Segment
+
+	/**************** Code Segment *******************/
+
 	else if (fault <= rodata_end && fault >= rodata_start) {
 		if (fault > rodata_next) {
 			printf("Virtual address not b/w RODATA start and next_free\n");
@@ -238,14 +289,81 @@ extern int handle_page_fault(void)
 		}
 		// TODO: Check WRITE access
 		else {
-			// createPt(fault, "rodata") // Convert to number
+
+	/* Fill up Page Table Pages entries */
+        if (*(l4addr + offsetL4) & 1)        // If PT already present
+                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+        else {
+                pfnL3 = os_pfn_alloc(OS_PT_REG);
+                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | us);
+        }
+
+        l3addr = osmap(pfnL3);
+        if (*(l3addr + offsetL3) & 1)        // If PT already present
+                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+        else {
+                pfnL2 = os_pfn_alloc(OS_PT_REG);
+                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | us);
+        }
+
+        l2addr = osmap(pfnL2);
+        if (*(l2addr + offsetL2) & 1)        // If PT already present
+                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+        else {
+                pfnL1 = os_pfn_alloc(OS_PT_REG);
+                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | us);
+        }
+
+        /* Final mapping to Data Physical Page */
+        l1addr = osmap(pfnL1);
+        if (*(l1addr + offsetL1) & 1)        // If PT already present
+                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+        else {
+                dataPFN = os_pfn_alloc(USER_REG);
+                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | us);
+        }
 			// TODO: iretq instruction
 		}
 	}
 
-	// If the accessed address is in RODATA Segment
+
+	/**************** Stack Segment *******************/
+
 	else if (fault <= stack_end && fault >= stack_start) {
-		// createPt(fault, "stack") // Convert to number
+
+	/* Fill up Page Table Pages entries */
+        if (*(l4addr + offsetL4) & 1)        // If PT already present
+                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+        else {
+                pfnL3 = os_pfn_alloc(OS_PT_REG);
+                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | rw | us);
+        }
+
+        l3addr = osmap(pfnL3);
+        if (*(l3addr + offsetL3) & 1)        // If PT already present
+                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+        else {
+                pfnL2 = os_pfn_alloc(OS_PT_REG);
+                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | rw | us);
+        }
+
+        l2addr = osmap(pfnL2);
+        if (*(l2addr + offsetL2) & 1)        // If PT already present
+                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+        else {
+                pfnL1 = os_pfn_alloc(OS_PT_REG);
+                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | rw | us);
+        }
+
+        /* Final mapping to Data Physical Page */
+        l1addr = osmap(pfnL1);
+        if (*(l1addr + offsetL1) & 1)        // If PT already present
+                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+        else {
+                dataPFN = os_pfn_alloc(USER_REG);
+                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
+        }
+
 		// TODO: iretq instruction
 	}
 
