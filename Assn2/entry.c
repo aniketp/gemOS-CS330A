@@ -202,6 +202,9 @@ extern int handle_page_fault(void)
     	     :"memory"
     	);
 
+	// TODO: Extract out the WRITE bit
+	u32 write_bit = 0;
+
 	struct exec_context *current = get_current_ctx();
 
 	// Store address limits of all segments
@@ -287,7 +290,11 @@ extern int handle_page_fault(void)
 			printf("Accessed Address: %x\n", fault);
 			do_exit();
 		}
-		// TODO: Check WRITE access
+		else if (write_bit == 1) {
+			printf("Write Access not allowed for CODE segment\n");
+			printf("Accessed Address: %x\n", fault);
+			do_exit();
+		}
 		else {
 
 	/* Fill up Page Table Pages entries */
