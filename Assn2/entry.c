@@ -29,57 +29,58 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
                               return current->id;
           case SYSCALL_WRITE:
 	  {
-		unsigned long code_start = current->mms[MM_SEG_CODE].start;
-		unsigned long code_end = current->mms[MM_SEG_CODE].end;
+		unsigned long stack_start = current->mms[MM_SEG_STACK].start;
+		unsigned long stack_end = current->mms[MM_SEG_STACK].end;
 
 		// Check for proper VA to PA mapping
-		unsigned long address = (unsigned long) param1;
-		unsigned long *l4addr = osmap(current->pgd);
-		unsigned long *l3addr, *l2addr, *l1addr;
-
-		u32 offsetL4, offsetL3, offsetL2, offsetL1;
-		u32 pfnL1, pfnL2, pfnL3;
-
-		/* Extract out all 4 level page offsets */
-		offsetL4 = PToffset & (address >> 39);
-		offsetL3 = PToffset & (address >> 30);
-		offsetL2 = PToffset & (address >> 21);
-		offsetL1 = PToffset & (address >> 12);
-
-
-		/* Check Proper PT Mapping and exit if Page Fault occurs */
-		if ((*(l4addr + offsetL4) & 1) == 0)
-			return -1;
-		else {
-			pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
-			l3addr = osmap(pfnL3);
-		}
-
-		if ((*(l3addr + offsetL3) & 1) == 0)
-			return -1;
-		else {
-			pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
-			l2addr = osmap(pfnL2);
-		}
-
-		if ((*(l2addr + offsetL2) & 1) == 0)
-			return -1;
-		else {
-			pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
-			l1addr = osmap(pfnL1);
-		}
-
-		if ((*(l1addr + offsetL1) & 1) == 0)
-			return -1;
+		// unsigned long address = (unsigned long) param1;
+		// unsigned long *l4addr = osmap(current->pgd);
+		// unsigned long *l3addr, *l2addr, *l1addr;
+		//
+		// u32 offsetL4, offsetL3, offsetL2, offsetL1;
+		// u32 pfnL1, pfnL2, pfnL3;
+		//
+		// /* Extract out all 4 level page offsets */
+		// offsetL4 = PToffset & (address >> 39);
+		// offsetL3 = PToffset & (address >> 30);
+		// offsetL2 = PToffset & (address >> 21);
+		// offsetL1 = PToffset & (address >> 12);
+		//
+		//
+		// /* Check Proper PT Mapping and exit if Page Fault occurs */
+		// if ((*(l4addr + offsetL4) & 1) == 0)
+		// 	return -1;
+		// else {
+		// 	pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+		// 	l3addr = osmap(pfnL3);
+		// }
+		//
+		// if ((*(l3addr + offsetL3) & 1) == 0)
+		// 	return -1;
+		// else {
+		// 	pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+		// 	l2addr = osmap(pfnL2);
+		// }
+		//
+		// if ((*(l2addr + offsetL2) & 1) == 0)
+		// 	return -1;
+		// else {
+		// 	pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+		// 	l1addr = osmap(pfnL1);
+		// }
+		//
+		// if ((*(l1addr + offsetL1) & 1) == 0)
+		// 	return -1;
 
 
 		// Check whether buff data is not invalid address mapping
-		if (param1 > code_end && param1 < code_start)
+		if (param1 > stack_end || param1 < stack_start)
 			return -1;
 
+
 		// Same sanity check for buff + len - 1
-		if (param1 + param2 - 1 > code_end &&
-			param1 + param2 - 1 < code_start)
+		if (param1 + param2 - 1 > stack_end ||
+			param1 + param2 - 1 < stack_start)
 			return -1;
 
 		char *buff = (char *) param1;
@@ -169,20 +170,91 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 
 extern int handle_div_by_zero(void)
 {
-	unsigned long stackptr;
+	unsigned long *baseptr;
 	asm volatile(
-	     "mov 8(%%rsp), %0"
-	     :"=r" (stackptr)
+	     "mov %%rbp, %0"
+	     :"=r" (baseptr)
 	     :
 	     :"memory"
 	);
-	printf("Div-by-zero detected at %x\n", stackptr);
+	printf("Div-by-zero detected at %x\n", *(baseptr + 1));
 	do_exit();
 }
 
 extern int handle_page_fault(void)
 {
-    /*Your code goes in here*/
-    printf("page fault handler: unimplemented!\n");
-    return 0;
+	unsigned long fault;
+	unsigned long *apple;
+    	asm volatile(
+    	     "mov %%cr2, %0"
+    	     :"=r" (fault)
+    	     :
+    	     :"memory"
+    	);
+
+	asm volatile(
+    	     "mov %%rbp, %0"
+    	     :"=r" (apple)
+    	     :
+    	     :"memory"
+    	);
+
+	printf("%x\n", *(apple + 3));
+
+	struct exec_context *current = get_current_ctx();
+
+	// Store address limits of all segments
+	unsigned long data_end = current->mms[MM_SEG_DATA].end;
+	unsigned long data_next = current->mms[MM_SEG_DATA].next_free;
+	unsigned long data_start = current->mms[MM_SEG_DATA].start;
+
+	unsigned long rodata_end = current->mms[MM_SEG_RODATA].end;
+	unsigned long rodata_next = current->mms[MM_SEG_RODATA].next_free;
+	unsigned long rodata_start = current->mms[MM_SEG_RODATA].start;
+
+	unsigned long stack_end = current->mms[MM_SEG_STACK].end;
+	unsigned long stack_start = current->mms[MM_SEG_STACK].start;
+
+
+	// If the accessed address is in DATA Segment
+	if (fault <= data_end && fault >= data_start) {
+		if (fault > data_next) {
+			printf("Virtual address not b/w Data start and next_free\n");
+			printf("Accessed Address: %x\n", fault);
+			do_exit();
+		}
+		else {
+			// createPt(fault, "data") // Convert to number
+			// TODO: iretq instruction
+		}
+	}
+
+	// If the accessed address is in RODATA Segment
+	else if (fault <= rodata_end && fault >= rodata_start) {
+		if (fault > rodata_next) {
+			printf("Virtual address not b/w RODATA start and next_free\n");
+			printf("Accessed Address: %x\n", fault);
+			do_exit();
+		}
+		// TODO: Check WRITE access
+		else {
+			// createPt(fault, "rodata") // Convert to number
+			// TODO: iretq instruction
+		}
+	}
+
+	// If the accessed address is in RODATA Segment
+	else if (fault <= stack_end && fault >= stack_start) {
+		// createPt(fault, "stack") // Convert to number
+		// TODO: iretq instruction
+	}
+
+	// Else: The accessed address is nowhere to be found :P
+	else {
+		printf("Virtual address not in range of any segment\n");
+		printf("Accessed Address: %x\n", fault);
+		do_exit();
+	}
+
+	do_exit();
 }
