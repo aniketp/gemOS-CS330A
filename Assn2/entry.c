@@ -1,3 +1,7 @@
+/*
+ * AUTHOR : Aniket Pandey <aniketp@iitk.ac.in>	(160113)
+ */
+
 #include<init.h>
 #include<lib.h>
 #include<context.h>
@@ -244,38 +248,38 @@ extern int handle_page_fault(void)
 		}
 		else {
 
-	/* Fill up Page Table Pages entries */
-        if (*(l4addr + offsetL4) & 1)        // If PT already present
-                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
-        else {
-                pfnL3 = os_pfn_alloc(OS_PT_REG);
-                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | rw | us);
-        }
+			/* Fill up Page Table Pages entries */
+		        if (*(l4addr + offsetL4) & 1)        // If PT already present
+		                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+		        else {
+		                pfnL3 = os_pfn_alloc(OS_PT_REG);
+		                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | rw | us);
+		        }
 
-        l3addr = osmap(pfnL3);
-        if (*(l3addr + offsetL3) & 1)        // If PT already present
-                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
-        else {
-                pfnL2 = os_pfn_alloc(OS_PT_REG);
-                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | rw | us);
-        }
+		        l3addr = osmap(pfnL3);
+		        if (*(l3addr + offsetL3) & 1)        // If PT already present
+		                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+		        else {
+		                pfnL2 = os_pfn_alloc(OS_PT_REG);
+		                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | rw | us);
+		        }
 
-        l2addr = osmap(pfnL2);
-        if (*(l2addr + offsetL2) & 1)        // If PT already present
-                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
-        else {
-                pfnL1 = os_pfn_alloc(OS_PT_REG);
-                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | rw | us);
-        }
+		        l2addr = osmap(pfnL2);
+		        if (*(l2addr + offsetL2) & 1)        // If PT already present
+		                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+		        else {
+		                pfnL1 = os_pfn_alloc(OS_PT_REG);
+		                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | rw | us);
+		        }
 
-        /* Final mapping to Data Physical Page */
-        l1addr = osmap(pfnL1);
-        if (*(l1addr + offsetL1) & 1)        // If PT already present
-                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
-        else {
-                dataPFN = os_pfn_alloc(USER_REG);
-                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
-        }
+		        /* Final mapping to Data Physical Page */
+		        l1addr = osmap(pfnL1);
+		        if (*(l1addr + offsetL1) & 1)        // If PT already present
+		                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+		        else {
+		                dataPFN = os_pfn_alloc(USER_REG);
+		                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
+		        }
 
 			// TODO: iretq instruction
 		}
@@ -297,38 +301,38 @@ extern int handle_page_fault(void)
 		}
 		else {
 
-	/* Fill up Page Table Pages entries */
-        if (*(l4addr + offsetL4) & 1)        // If PT already present
-                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
-        else {
-                pfnL3 = os_pfn_alloc(OS_PT_REG);
-                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | us);
-        }
+			/* Fill up Page Table Pages entries */
+		        if (*(l4addr + offsetL4) & 1)        // If PT already present
+		                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+		        else {
+		                pfnL3 = os_pfn_alloc(OS_PT_REG);
+		                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | us);
+		        }
 
-        l3addr = osmap(pfnL3);
-        if (*(l3addr + offsetL3) & 1)        // If PT already present
-                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
-        else {
-                pfnL2 = os_pfn_alloc(OS_PT_REG);
-                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | us);
-        }
+		        l3addr = osmap(pfnL3);
+		        if (*(l3addr + offsetL3) & 1)        // If PT already present
+		                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+		        else {
+		                pfnL2 = os_pfn_alloc(OS_PT_REG);
+		                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | us);
+		        }
 
-        l2addr = osmap(pfnL2);
-        if (*(l2addr + offsetL2) & 1)        // If PT already present
-                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
-        else {
-                pfnL1 = os_pfn_alloc(OS_PT_REG);
-                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | us);
-        }
+		        l2addr = osmap(pfnL2);
+		        if (*(l2addr + offsetL2) & 1)        // If PT already present
+		                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+		        else {
+		                pfnL1 = os_pfn_alloc(OS_PT_REG);
+		                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | us);
+		        }
 
-        /* Final mapping to Data Physical Page */
-        l1addr = osmap(pfnL1);
-        if (*(l1addr + offsetL1) & 1)        // If PT already present
-                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
-        else {
-                dataPFN = os_pfn_alloc(USER_REG);
-                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | us);
-        }
+		        /* Final mapping to Data Physical Page */
+		        l1addr = osmap(pfnL1);
+		        if (*(l1addr + offsetL1) & 1)        // If PT already present
+		                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+		        else {
+		                dataPFN = os_pfn_alloc(USER_REG);
+		                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | us);
+		        }
 			// TODO: iretq instruction
 		}
 	}
@@ -338,43 +342,43 @@ extern int handle_page_fault(void)
 
 	else if (fault <= stack_end && fault >= stack_start) {
 
-	/* Fill up Page Table Pages entries */
-        if (*(l4addr + offsetL4) & 1)        // If PT already present
-                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
-        else {
-                pfnL3 = os_pfn_alloc(OS_PT_REG);
-                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | rw | us);
-        }
+		/* Fill up Page Table Pages entries */
+	        if (*(l4addr + offsetL4) & 1)        // If PT already present
+	                pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+	        else {
+	                pfnL3 = os_pfn_alloc(OS_PT_REG);
+	                *(l4addr + offsetL4) = (pfnL3 << PTEoffset) | (pr | rw | us);
+	        }
 
-        l3addr = osmap(pfnL3);
-        if (*(l3addr + offsetL3) & 1)        // If PT already present
-                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
-        else {
-                pfnL2 = os_pfn_alloc(OS_PT_REG);
-                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | rw | us);
-        }
+	        l3addr = osmap(pfnL3);
+	        if (*(l3addr + offsetL3) & 1)        // If PT already present
+	                pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+	        else {
+	                pfnL2 = os_pfn_alloc(OS_PT_REG);
+	                *(l3addr + offsetL3) = (pfnL2 << PTEoffset) | (pr | rw | us);
+	        }
 
-        l2addr = osmap(pfnL2);
-        if (*(l2addr + offsetL2) & 1)        // If PT already present
-                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
-        else {
-                pfnL1 = os_pfn_alloc(OS_PT_REG);
-                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | rw | us);
-        }
+	        l2addr = osmap(pfnL2);
+	        if (*(l2addr + offsetL2) & 1)        // If PT already present
+	                pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+	        else {
+	                pfnL1 = os_pfn_alloc(OS_PT_REG);
+	                *(l2addr + offsetL2) = (pfnL1 << PTEoffset) | (pr | rw | us);
+	        }
 
-        /* Final mapping to Data Physical Page */
-        l1addr = osmap(pfnL1);
-        if (*(l1addr + offsetL1) & 1)        // If PT already present
-                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
-        else {
-                dataPFN = os_pfn_alloc(USER_REG);
-                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
-        }
+	        /* Final mapping to Data Physical Page */
+	        l1addr = osmap(pfnL1);
+	        if (*(l1addr + offsetL1) & 1)        // If PT already present
+	                dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+	        else {
+	                dataPFN = os_pfn_alloc(USER_REG);
+	                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
+	        }
 
 		// TODO: iretq instruction
 	}
 
-	// Else: The accessed address is nowhere to be found :P
+	// Else: The virtual address is nowhere to be found :P
 	else {
 		printf("Virtual address not in range of any segment\n");
 		printf("Accessed Address: %x\n", fault);
