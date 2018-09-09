@@ -21,7 +21,7 @@
 #define us             0x004             /* User Mode */
 
 /*System Call handler*/
-int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
+unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 {
     struct exec_context *current = get_current_ctx();
     printf("[GemOS] System call invoked. syscall no  = %d\n", syscall);
@@ -54,7 +54,7 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 		offsetL2 = PToffset & (address >> L2offset);
 		offsetL1 = PToffset & (address >> L1offset);
 
-
+#if 0
 		/* Check Proper PT Mapping and exit if Page Fault occurs */
 		if ((*(l4addr + offsetL4) & 1) == 0)
 			return -1;
@@ -79,17 +79,10 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 
 		if ((*(l1addr + offsetL1) & 1) == 0)
 			return -1;
-
-
-		// Check whether buff data is not invalid address mapping
-		if (param1 > stack_end || param1 < stack_start)
-			return -1;
-
-
-		// Same sanity check for buff + len - 1
-		if (param1 + param2 - 1 > stack_end ||
-			param1 + param2 - 1 < stack_start)
-			return -1;
+#endif
+		// printf("%x\n", param1);
+		// printf("%x\n", stack_start);
+		// printf("%x\n", stack_end);
 
 		char *buff = (char *) param1;
 		int len = (int) param2;
@@ -146,6 +139,13 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 		  if (size < 0)
 			  return 0;
 
+		  unsigned long address = (unsigned long) param1;
+		  unsigned long *l4addr = osmap(current->pgd);
+		  unsigned long *l3addr, *l2addr, *l1addr;
+
+		  u32 offsetL4, offsetL3, offsetL2, offsetL1;
+		  u32 pfnL1, pfnL2, pfnL3, dataPFN;
+
 		  unsigned long data_next = current->mms[MM_SEG_DATA].next_free;
 		  unsigned long data_start = current->mms[MM_SEG_DATA].start;
 
@@ -155,13 +155,87 @@ int do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 param4)
 		  if (flags == MAP_WR) {
 			  if (data_next - (size * 4096) < data_start)
 				  return 0;
-			  current->mms[MM_SEG_DATA].next_free -= size * 4096;
-			  return current->mms[MM_SEG_DATA].next_free;
+
+			for (int i = 0; i < size; i++) {
+				current->mms[MM_SEG_DATA].next_free -= 4096;
+				address = current->mms[MM_SEG_DATA].next_free;
+
+				/* Extract out all 4 level page offsets */
+				offsetL4 = PToffset & (address >> L4offset);
+				offsetL3 = PToffset & (address >> L3offset);
+				offsetL2 = PToffset & (address >> L2offset);
+				offsetL1 = PToffset & (address >> L1offset);
+
+				/* Cleanup Page Table entries */
+				if (*(l4addr + offsetL4) & 1) {
+					pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+					l3addr = osmap(pfnL3);
+				}
+
+				if (*(l3addr + offsetL3) & 1) {
+					pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+					l2addr = osmap(pfnL2);
+				}
+
+				if (*(l2addr + offsetL2) & 1) {
+					pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+					l1addr = osmap(pfnL1);
+				}
+
+				if (*(l1addr + offsetL1) & 1) {
+					dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+					// Set the present bit as 0
+					*(l1addr + offsetL1) &= ~1;
+				}
+
+				// Free the data page
+				os_pfn_free(USER_REG, dataPFN);
+
+
+			}
+
+			return current->mms[MM_SEG_DATA].next_free;
 		  }
 		  else if (flags == MAP_RD) {
 			  if (rodata_next - (size * 4096) < rodata_start)
 				  return 0;
-			  current->mms[MM_SEG_RODATA].next_free -= size * 4096;
+
+			  for (int i = 0; i < size; i++) {
+				  current->mms[MM_SEG_RODATA].next_free -= 4096;
+				  address = current->mms[MM_SEG_RODATA].next_free;
+
+				  /* Extract out all 4 level page offsets */
+				  offsetL4 = PToffset & (address >> L4offset);
+				  offsetL3 = PToffset & (address >> L3offset);
+				  offsetL2 = PToffset & (address >> L2offset);
+				  offsetL1 = PToffset & (address >> L1offset);
+
+				  /* Cleanup Page Table entries */
+				  if (*(l4addr + offsetL4) & 1) {
+					  pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+					  l3addr = osmap(pfnL3);
+				  }
+
+				  if (*(l3addr + offsetL3) & 1) {
+					  pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+					  l2addr = osmap(pfnL2);
+				  }
+
+				  if (*(l2addr + offsetL2) & 1) {
+					  pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+					  l1addr = osmap(pfnL1);
+				  }
+
+				  if (*(l1addr + offsetL1) & 1) {
+					  dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+					  // Set the present bit as 0
+					  *(l1addr + offsetL1) &= ~1;
+				  }
+
+				  // Free the data page
+				  os_pfn_free(USER_REG, dataPFN);
+
+			  }
 			  return current->mms[MM_SEG_RODATA].next_free;
 		  }
 
@@ -207,7 +281,9 @@ extern int handle_page_fault(void)
     	);
 
 	// TODO: Extract out the WRITE bit
-	u32 write_bit = 0;
+	unsigned long *error = baseptr + 1;
+	unsigned long *insptr = baseptr + 2;
+	u32 write_bit = (*error >> 1) & 1;
 
 	struct exec_context *current = get_current_ctx();
 
@@ -243,7 +319,8 @@ extern int handle_page_fault(void)
 	if (fault <= data_end && fault >= data_start) {
 		if (fault > data_next) {
 			printf("Virtual address not b/w Data start and next_free\n");
-			printf("Accessed Address: %x\n", fault);
+			printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+				fault, *insptr, *error);
 			do_exit();
 		}
 		else {
@@ -281,7 +358,6 @@ extern int handle_page_fault(void)
 		                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
 		        }
 
-			// TODO: iretq instruction
 		}
 	}
 
@@ -291,12 +367,14 @@ extern int handle_page_fault(void)
 	else if (fault <= rodata_end && fault >= rodata_start) {
 		if (fault > rodata_next) {
 			printf("Virtual address not b/w RODATA start and next_free\n");
-			printf("Accessed Address: %x\n", fault);
+			printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+				fault, *insptr, *error);
 			do_exit();
 		}
 		else if (write_bit == 1) {
 			printf("Write Access not allowed for CODE segment\n");
-			printf("Accessed Address: %x\n", fault);
+			printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+				fault, *insptr, *error);
 			do_exit();
 		}
 		else {
@@ -333,7 +411,6 @@ extern int handle_page_fault(void)
 		                dataPFN = os_pfn_alloc(USER_REG);
 		                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | us);
 		        }
-			// TODO: iretq instruction
 		}
 	}
 
@@ -375,15 +452,25 @@ extern int handle_page_fault(void)
 	                *(l1addr + offsetL1) = (dataPFN << PTEoffset) | (pr | rw | us);
 	        }
 
-		// TODO: iretq instruction
 	}
 
 	// Else: The virtual address is nowhere to be found :P
 	else {
 		printf("Virtual address not in range of any segment\n");
-		printf("Accessed Address: %x\n", fault);
+		printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+			fault, *insptr, *error);
 		do_exit();
 	}
+
+	printf("PF Handler invoked %x\n", fault);
+
+	asm volatile(
+    	     "mov %0, %%rsp;"
+	     "iretq;"
+    	     :"=r" (insptr)
+    	     :
+	     :"memory"
+    	);
 
 	do_exit();
 }
