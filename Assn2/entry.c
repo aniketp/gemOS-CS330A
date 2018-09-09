@@ -54,7 +54,7 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 		offsetL2 = PToffset & (address >> L2offset);
 		offsetL1 = PToffset & (address >> L1offset);
 
-#if 0
+#if 1
 		/* Check Proper PT Mapping and exit if Page Fault occurs */
 		if ((*(l4addr + offsetL4) & 1) == 0)
 			return -1;
@@ -80,9 +80,6 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 		if ((*(l1addr + offsetL1) & 1) == 0)
 			return -1;
 #endif
-		// printf("%x\n", param1);
-		// printf("%x\n", stack_start);
-		// printf("%x\n", stack_end);
 
 		char *buff = (char *) param1;
 		int len = (int) param2;
@@ -265,6 +262,33 @@ extern int handle_div_by_zero(void)
 
 extern int handle_page_fault(void)
 {
+	asm volatile(
+		"push %%r8;"
+		"push %%r9;"
+		"push %%r10;"
+		"push %%r11;"
+		"push %%r12;"
+		"push %%r13;"
+		"push %%r14;"
+		"push %%r15;"
+		"push %%rax;"
+		"push %%rbx;"
+		"push %%rcx;"
+		"push %%rdx;"
+		"push %%rsi;"
+		"push %%rdi;"
+		:::
+	);
+
+	unsigned long *saved_stk;
+	asm volatile(
+		"mov %%rsp, %0"
+		:"=r" (saved_stk)
+		:
+		:"memory"
+	);
+	printf("%x\n", saved_stk);
+
 	unsigned long fault, *baseptr;
 	asm volatile(
     	     "mov %%cr2, %0"
@@ -464,13 +488,29 @@ extern int handle_page_fault(void)
 
 	printf("PF Handler invoked %x\n", fault);
 
-	asm volatile(
-    	     "mov %0, %%rsp;"
-	     "iretq;"
-    	     :"=r" (insptr)
-    	     :
-	     :"memory"
-    	);
+	asm volatile (  "mov %0, %%rsp;"
+                    "pop %%rdi;"
+                    "pop %%rsi;"
+                    "pop %%rdx;"
+                    "pop %%rcx;"
+                    "pop %%rbx;"
+                    "pop %%rax;"
+                    "pop %%r15;"
+                    "pop %%r14;"
+                    "pop %%r13;"
+                    "pop %%r12;"
+                    "pop %%r11;"
+                    "pop %%r10;"
+                    "pop %%r9;"
+                    "pop %%r8;"
+                    "mov %%rbp, %%rsp;"
+                    "pop %%rbp;"
+                    "add $8, %%rsp;"
+                    "iretq;"
+                  :
+                  : "r" (saved_stk)
+                  : "memory"
+    );
 
 	do_exit();
 }
