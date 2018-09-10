@@ -1,4 +1,5 @@
 #include<init.h>
+#include<memory.h>
 static void exit(int);
 static int main(void);
 
@@ -21,7 +22,7 @@ static int _syscall0(int syscall_num)
 
 /*Invoke system call with one argument*/
 
-static int _syscall1(int syscall_num, int exit_code)
+static u64 _syscall1(int syscall_num, int exit_code)
 {
   asm volatile ( "int $0x80;"
                  "leaveq;"
@@ -31,7 +32,7 @@ static int _syscall1(int syscall_num, int exit_code)
 }
 
 /*Invoke write system call */
-static int _syscall2(int syscall_num, char *buf, int length)
+static u64 _syscall2(int syscall_num, char *buf, int length)
 {
   asm volatile ( "int $0x80;"
                  "leaveq;"
@@ -41,7 +42,17 @@ static int _syscall2(int syscall_num, char *buf, int length)
 }
 
 /*Invoke expand system call */
-static int _syscall3(int syscall_num, u32 size, int flags)
+static u64 _syscall3(int syscall_num, u32 size, int flags)
+{
+  asm volatile ( "int $0x80;"
+                 "leaveq;"
+                 "retq;"
+                :::"memory");
+  return 0;   /*gcc shutup!*/
+}
+
+/*Invoke shrink system call */
+static u64 _syscall4(int syscall_num, u32 size, int flags)
 {
   asm volatile ( "int $0x80;"
                  "leaveq;"
@@ -56,32 +67,42 @@ static void exit(int code)
   _syscall1(SYSCALL_EXIT, code);
 }
 
-static int getpid()
+static u64 getpid()
 {
   return(_syscall0(SYSCALL_GETPID));
 }
 
-static int write(char *buf, int length)
+static u64 write(char *buf, int length)
 {
   return(_syscall2(SYSCALL_WRITE, buf, length));
 }
 
-static void *expand(u32 size, int flags)
+static u64 expand(u32 size, int flags)
 {
   return(_syscall3(SYSCALL_EXPAND, size, flags));
 }
 
+static u64 shrink(u32 size, int flags)
+{
+  return(_syscall4(SYSCALL_SHRINK, size, flags));
+}
+
+
 
 static int main()
 {
-  unsigned long i;
-#if 0
-  unsigned long *ptr = (unsigned long *)0x100032;
-  i = *ptr;
-#endif
-  i = getpid();
-  i = i/0;
+	void *ptr1;
+	char *ptr = (char *) expand(8, MAP_WR);
 
-  write((char *)0x14FFFFFFF, 3);
-  return 0;
+	if(ptr == NULL)
+	      write("FAILED\n", 7);
+
+	*(ptr + 8192000) = 'A';   /*Page fault will occur and handled successfully*/
+
+	ptr1 = (char *) shrink(7, MAP_WR);
+	*ptr = 'A';          /*Page fault will occur and handled successfully*/
+
+	*(ptr + 4096) = 'A';   /*Page fault will occur and PF handler should termminate
+	           // the process (gemOS shell should be back) by printing an error message*/
+ 	 exit(0);
 }

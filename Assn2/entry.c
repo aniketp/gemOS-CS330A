@@ -54,7 +54,6 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 		offsetL2 = PToffset & (address >> L2offset);
 		offsetL1 = PToffset & (address >> L1offset);
 
-#if 1
 		/* Check Proper PT Mapping and exit if Page Fault occurs */
 		if ((*(l4addr + offsetL4) & 1) == 0)
 			return -1;
@@ -79,8 +78,8 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 
 		if ((*(l1addr + offsetL1) & 1) == 0)
 			return -1;
-#endif
 
+		// Verify the validity of passed arguments
 		char *buff = (char *) param1;
 		int len = (int) param2;
 
@@ -167,23 +166,23 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 				if (*(l4addr + offsetL4) & 1) {
 					pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
 					l3addr = osmap(pfnL3);
-				}
+				} else continue;
 
 				if (*(l3addr + offsetL3) & 1) {
 					pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
 					l2addr = osmap(pfnL2);
-				}
+				} else continue;
 
 				if (*(l2addr + offsetL2) & 1) {
 					pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
 					l1addr = osmap(pfnL1);
-				}
+				} else continue;
 
 				if (*(l1addr + offsetL1) & 1) {
 					dataPFN = *(l1addr + offsetL1) >> PTEoffset;
 					// Set the present bit as 0
 					*(l1addr + offsetL1) &= ~1;
-				}
+				} else continue;
 
 				// Free the data page
 				os_pfn_free(USER_REG, dataPFN);
@@ -211,23 +210,23 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 				  if (*(l4addr + offsetL4) & 1) {
 					  pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
 					  l3addr = osmap(pfnL3);
-				  }
+				  } else continue;
 
 				  if (*(l3addr + offsetL3) & 1) {
 					  pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
 					  l2addr = osmap(pfnL2);
-				  }
+				  } else continue;
 
 				  if (*(l2addr + offsetL2) & 1) {
 					  pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
 					  l1addr = osmap(pfnL1);
-				  }
+				  } else continue;
 
 				  if (*(l1addr + offsetL1) & 1) {
 					  dataPFN = *(l1addr + offsetL1) >> PTEoffset;
 					  // Set the present bit as 0
 					  *(l1addr + offsetL1) &= ~1;
-				  }
+				  } else continue;
 
 				  // Free the data page
 				  os_pfn_free(USER_REG, dataPFN);
@@ -262,6 +261,7 @@ extern int handle_div_by_zero(void)
 
 extern int handle_page_fault(void)
 {
+	/* Save the GPRs on the OS stack, in case OS messes them up */
 	asm volatile(
 		"push %%r8;"
 		"push %%r9;"
@@ -277,7 +277,9 @@ extern int handle_page_fault(void)
 		"push %%rdx;"
 		"push %%rsi;"
 		"push %%rdi;"
-		:::
+		:
+		:
+		:"memory"
 	);
 
 	unsigned long *saved_stk;
@@ -287,7 +289,6 @@ extern int handle_page_fault(void)
 		:
 		:"memory"
 	);
-	printf("%x\n", saved_stk);
 
 	unsigned long fault, *baseptr;
 	asm volatile(
@@ -304,7 +305,6 @@ extern int handle_page_fault(void)
     	     :"memory"
     	);
 
-	// TODO: Extract out the WRITE bit
 	unsigned long *error = baseptr + 1;
 	unsigned long *insptr = baseptr + 2;
 	u32 write_bit = (*error >> 1) & 1;
@@ -323,7 +323,7 @@ extern int handle_page_fault(void)
 	unsigned long stack_end = current->mms[MM_SEG_STACK].end;
 	unsigned long stack_start = current->mms[MM_SEG_STACK].start;
 
-	// Reuse this
+	// Reuse this for every segment
 	unsigned long address = fault;
 	unsigned long *l4addr = osmap(current->pgd);
 	unsigned long *l3addr, *l2addr, *l1addr;
@@ -343,7 +343,7 @@ extern int handle_page_fault(void)
 	if (fault <= data_end && fault >= data_start) {
 		if (fault > data_next) {
 			printf("Virtual address not b/w Data start and next_free\n");
-			printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+			printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 				fault, *insptr, *error);
 			do_exit();
 		}
@@ -391,13 +391,13 @@ extern int handle_page_fault(void)
 	else if (fault <= rodata_end && fault >= rodata_start) {
 		if (fault > rodata_next) {
 			printf("Virtual address not b/w RODATA start and next_free\n");
-			printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+			printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 				fault, *insptr, *error);
 			do_exit();
 		}
 		else if (write_bit == 1) {
 			printf("Write Access not allowed for CODE segment\n");
-			printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+			printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 				fault, *insptr, *error);
 			do_exit();
 		}
@@ -481,13 +481,12 @@ extern int handle_page_fault(void)
 	// Else: The virtual address is nowhere to be found :P
 	else {
 		printf("Virtual address not in range of any segment\n");
-		printf("Accessed Address: %x\nRIP: %x\nError Code: &x\n",
+		printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 			fault, *insptr, *error);
 		do_exit();
 	}
 
-	printf("PF Handler invoked %x\n", fault);
-
+	// Restore the saved user-stack general purpose registers
 	asm volatile (  "mov %0, %%rsp;"
                     "pop %%rdi;"
                     "pop %%rsi;"
