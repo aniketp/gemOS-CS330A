@@ -83,11 +83,11 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 		char *buff = (char *) param1;
 		int len = (int) param2;
 
-		/* Sanity for value of len */
+		/* Sanity for value of len and buff */
 		if (len <= 0 || len > 1024 || buff == 0)
 			return -1;
 
-		// Write only the len bytes
+		// Write only the first len bytes
 		len = (len > strlen(buff)) ? strlen(buff) : len;
 		for (int i = 0; i < len; i++)
 		 	printf("%c", buff[i]);
@@ -180,13 +180,21 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 
 				if (*(l1addr + offsetL1) & 1) {
 					dataPFN = *(l1addr + offsetL1) >> PTEoffset;
-					// Set the present bit as 0
+					// Set the present bit as 0 (Entire PTE)
 					*(l1addr + offsetL1) &= ~1;
 				} else continue;
 
 				// Free the data page
 				os_pfn_free(USER_REG, dataPFN);
 
+				// Invalidate TLB entries corresponding to
+				// the page that was freed.
+				asm volatile(
+					"invlpg (%0)"
+					:
+					:"r" (address)
+					:"memory"
+				);
 
 			}
 
@@ -197,40 +205,48 @@ unsigned long do_syscall(int syscall, u64 param1, u64 param2, u64 param3, u64 pa
 				  return 0;
 
 			  for (int i = 0; i < size; i++) {
-				  current->mms[MM_SEG_RODATA].next_free -= 4096;
-				  address = current->mms[MM_SEG_RODATA].next_free;
+				current->mms[MM_SEG_RODATA].next_free -= 4096;
+				address = current->mms[MM_SEG_RODATA].next_free;
 
-				  /* Extract out all 4 level page offsets */
-				  offsetL4 = PToffset & (address >> L4offset);
-				  offsetL3 = PToffset & (address >> L3offset);
-				  offsetL2 = PToffset & (address >> L2offset);
-				  offsetL1 = PToffset & (address >> L1offset);
+				/* Extract out all 4 level page offsets */
+				offsetL4 = PToffset & (address >> L4offset);
+				offsetL3 = PToffset & (address >> L3offset);
+				offsetL2 = PToffset & (address >> L2offset);
+				offsetL1 = PToffset & (address >> L1offset);
 
-				  /* Cleanup Page Table entries */
-				  if (*(l4addr + offsetL4) & 1) {
-					  pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
-					  l3addr = osmap(pfnL3);
-				  } else continue;
+				/* Cleanup Page Table entries */
+				if (*(l4addr + offsetL4) & 1) {
+					pfnL3 = *(l4addr + offsetL4) >> PTEoffset;
+					l3addr = osmap(pfnL3);
+				} else continue;
 
-				  if (*(l3addr + offsetL3) & 1) {
-					  pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
-					  l2addr = osmap(pfnL2);
-				  } else continue;
+				if (*(l3addr + offsetL3) & 1) {
+					pfnL2 = *(l3addr + offsetL3) >> PTEoffset;
+					l2addr = osmap(pfnL2);
+				} else continue;
 
-				  if (*(l2addr + offsetL2) & 1) {
-					  pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
-					  l1addr = osmap(pfnL1);
-				  } else continue;
+				if (*(l2addr + offsetL2) & 1) {
+					pfnL1 = *(l2addr + offsetL2) >> PTEoffset;
+					l1addr = osmap(pfnL1);
+				} else continue;
 
-				  if (*(l1addr + offsetL1) & 1) {
-					  dataPFN = *(l1addr + offsetL1) >> PTEoffset;
-					  // Set the present bit as 0
-					  *(l1addr + offsetL1) &= ~1;
-				  } else continue;
+				if (*(l1addr + offsetL1) & 1) {
+					dataPFN = *(l1addr + offsetL1) >> PTEoffset;
+					// Set the present bit as 0
+					*(l1addr + offsetL1) &= ~1;
+				} else continue;
 
-				  // Free the data page
-				  os_pfn_free(USER_REG, dataPFN);
+				// Free the data page
+				os_pfn_free(USER_REG, dataPFN);
 
+				// Invalidate TLB entries corresponding to
+				// the page that was freed.
+				asm volatile(
+					"invlpg (%0)"
+					:
+					:"r" (address)
+					:"memory"
+				);
 			  }
 			  return current->mms[MM_SEG_RODATA].next_free;
 		  }
@@ -309,6 +325,13 @@ extern int handle_page_fault(void)
 	unsigned long *insptr = baseptr + 2;
 	u32 write_bit = (*error >> 1) & 1;
 
+	if (*error & 1) {
+		printf("Protection Fault\n");
+		printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
+			fault, *insptr, *error);
+		do_exit();
+	}
+
 	struct exec_context *current = get_current_ctx();
 
 	// Store address limits of all segments
@@ -342,7 +365,8 @@ extern int handle_page_fault(void)
 
 	if (fault <= data_end && fault >= data_start) {
 		if (fault > data_next) {
-			printf("Virtual address not b/w Data start and next_free\n");
+			printf("Virtual address not b/w Data segment's start"
+				" and next_free region\n");
 			printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 				fault, *insptr, *error);
 			do_exit();
@@ -390,12 +414,13 @@ extern int handle_page_fault(void)
 
 	else if (fault <= rodata_end && fault >= rodata_start) {
 		if (fault > rodata_next) {
-			printf("Virtual address not b/w RODATA start and next_free\n");
+			printf("Virtual address not b/w Code segment's start"
+				" and next_free region\n");
 			printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 				fault, *insptr, *error);
 			do_exit();
 		}
-		else if (write_bit == 1) {
+		else if (write_bit & 1) {
 			printf("Write Access not allowed for CODE segment\n");
 			printf("Accessed Address: %x\nRIP: %x\nError Code: %x\n",
 				fault, *insptr, *error);
