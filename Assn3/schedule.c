@@ -97,10 +97,13 @@ static void schedule_context(struct exec_context *next)
 
 static struct exec_context *pick_next_context(struct exec_context *list)
 {
-	for (int i = 0; i < MAX_PROCESSES; i++)
-		if (list[i].state == READY)
-			return &list[i];
-	return NULL;
+	struct exec_context *current = get_current_ctx();
+	u32 cpid = current->pid;
+
+	for (int i = cpid + 1; i <= cpid + MAX_PROCESSES; i++)
+		if (((list + (i % MAX_PROCESSES))->state == READY) && (i != MAX_PROCESSES))
+			return list + (i % MAX_PROCESSES);
+	return list;
 }
 
 // Scheduling routine
@@ -122,6 +125,12 @@ static void do_sleep_and_alarm_account()
 	for (int i = 0; i < MAX_PROCESSES; i++)
 		if (list[i].state == WAITING && list[i].ticks_to_sleep != 0)
 			list[i].ticks_to_sleep--;
+
+	for (int i = 0; i < MAX_PROCESSES; i++)
+		if (list[i].state == RUNNING && list[i].ticks_to_alarm != 0)
+			list[i].ticks_to_alarm--;
+
+	return;
 }
 
 /*The five functions above are just a template. You may change the signatures as you wish*/
@@ -176,6 +185,7 @@ void do_exit()
 	// struct exec_context *current = get_current_ctx();
 	// struct exec_context *list = get_ctx_list();
 	// current->state = UNUSED;
+	// os_pfn_free(USER_REG, dataPFN);
 	//
 	// int flag = 0;
 	// for (int i = 0; i < MAX_PROCESSES; i++)
@@ -230,7 +240,7 @@ long do_clone(void *th_func, void *user_stack)
 	for (int i = 0; i < MAX_SIGNALS; i++)
 		child->sighandlers[i] = current->sighandlers[i];
 	// But not the pending signals
-	child->pending_signal_bitmap = 0;
+	child->pending_signal_bitmap = 0x0;
 
 	// Now, copy the user_regs registers
 	child->regs.r15 = current->regs.r15;
@@ -251,14 +261,16 @@ long do_clone(void *th_func, void *user_stack)
 
 	child->regs.entry_cs = 0x2b;
 	child->regs.entry_ss = 0x23;
-	child->entry_rip = (u64)th_func;
+	child->regs.entry_rflags = current->regs.entry_rflags;
+	child->regs.entry_rip = (u64)th_func;
+	child->regs.entry_rsp = (u64)user_stack;
+	child->regs.rbp = (u64)user_stack;	// TODO: Check the validity
 
 	return 0;
 }
 
 long invoke_sync_signal(int signo, u64 *ustackp, u64 *urip)
 {
-
 
 /*If signal handler is registered, manipulate user stack and RIP to execute signal handler*/
 /*ustackp and urip are pointers to user RSP and user RIP in the exception/interrupt stack*/
@@ -268,13 +280,14 @@ Ignore for SIGALRM*/
     	struct exec_context *current = get_current_ctx();
 	printf("Called signal with ustackp=%x urip=%x\n", *ustackp, *urip);
 
-	if(signo != SIGALRM && (current->sighandlers[signo] == NULL))
+	if((signo != SIGALRM) && (current->sighandlers[signo] == NULL))
 		do_exit();
 
 	// Main routine
 	if (current->sighandlers[signo] != NULL) {
-		*(u64 *)(*ustackp) = *urip + 4;		// Confirm whether 4
+		*(u64 *)(*ustackp) = *urip;
 		*urip = (u64)current->sighandlers[signo];
+		*ustackp--;
 	}
 
 	return 0;
