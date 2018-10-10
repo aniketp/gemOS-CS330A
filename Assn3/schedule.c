@@ -99,7 +99,7 @@ static struct exec_context *pick_next_context(struct exec_context *list)
 {
 	for (int i = 0; i < MAX_PROCESSES; i++)
 		if (list[i].state == READY)
-			return list[i];
+			return &list[i];
 	return NULL;
 }
 
@@ -121,7 +121,7 @@ static void do_sleep_and_alarm_account()
 
 	for (int i = 0; i < MAX_PROCESSES; i++)
 		if (list[i].state == WAITING && list[i].ticks_to_sleep != 0)
-			ticks_to_sleep--;
+			list[i].ticks_to_sleep--;
 }
 
 /*The five functions above are just a template. You may change the signatures as you wish*/
@@ -140,10 +140,18 @@ void handle_timer_tick()
 	);
 
 	struct exec_context *current = get_current_ctx();
+	struct exec_context *swapper = get_ctx_by_pid(0);
+
+	if (swapper->state == RUNNING) {
+		// Check the ticks to sleep of stored process and if requires
+		// rescheduling, do that.
+	}
+
 	if (current->ticks_to_alarm) {
 		current->ticks_to_alarm--;
-		if (current->ticks_to_alarm == 0)
-			invoke_sync_signal(SIGALRM, baseptr, baseptr+1);
+		if (!(current->ticks_to_alarm) && (current->sighandlers[SIGALRM] != NULL)) {
+			invoke_sync_signal(SIGALRM, baseptr+4, baseptr+1);
+		}
 	}
 
   asm volatile("cli;"
@@ -164,15 +172,15 @@ void do_exit()
     the next process. If the only process alive in system is swapper,
     invoke do_cleanup() to shutdown gem5 (by crashing it, huh!)
     */
-
-	struct exec_context *current = get_current_ctx();
-	struct exec_context *list = get_ctx_list();
-	current->state = UNUSED;
-
-	bool flag = false;
-	for (int i = 0; i < MAX_PROCESSES; i++)
-		if (list[i].state == READY)
-			schedule();
+	//
+	// struct exec_context *current = get_current_ctx();
+	// struct exec_context *list = get_ctx_list();
+	// current->state = UNUSED;
+	//
+	// int flag = 0;
+	// for (int i = 0; i < MAX_PROCESSES; i++)
+	// 	if (list[i].state == READY)
+	// 		schedule();
 
 	do_cleanup();  /*Call this conditionally, see comments above*/
 }
@@ -195,28 +203,89 @@ long do_sleep(u32 ticks)
 */
 long do_clone(void *th_func, void *user_stack)
 {
+	struct exec_context *current = get_current_ctx();
+	struct exec_context *child = get_new_ctx();
 
+	/* Either copy from the parent or initialize according to the question */
+	printf("New PID: %d\n", child->pid);
+	int len = strlen(current->name);
+	// char cpid[1];
+
+	child->os_stack_pfn = os_pfn_alloc(OS_PT_REG);
+	memcpy(child->name, current->name, strlen(current->name));
+	// snprintf(cpid, "%d", current->pid, 1);
+	// memcpy(child->name + strlen(current->name), cpid, strlen(cpid));
+	// TODO: Fix this
+	printf("Child name: %s\n", child->name);
+
+	// Copy from parent
+	child->used_mem = current->used_mem;
+	child->pgd = current->pgd;
+	child->os_rsp = current->os_rsp;
+	child->ticks_to_sleep = current->ticks_to_sleep;
+	child->ticks_to_alarm = current->ticks_to_alarm;
+	child->alarm_config_time = current->alarm_config_time;
+
+	// Signal handlers are also copied
+	for (int i = 0; i < MAX_SIGNALS; i++)
+		child->sighandlers[i] = current->sighandlers[i];
+	// But not the pending signals
+	child->pending_signal_bitmap = 0;
+
+	// Now, copy the user_regs registers
+	child->regs.r15 = current->regs.r15;
+	child->regs.r14 = current->regs.r14;
+	child->regs.r13 = current->regs.r13;
+	child->regs.r12 = current->regs.r12;
+	child->regs.r11 = current->regs.r11;
+	child->regs.r10 = current->regs.r10;
+	child->regs.r9 = current->regs.r9;
+	child->regs.r8 = current->regs.r8;
+
+	child->regs.rax = current->regs.rax;
+	child->regs.rbx = current->regs.rbx;
+	child->regs.rcx = current->regs.rcx;
+	child->regs.rdx = current->regs.rdx;
+	child->regs.rdi = current->regs.rdi;
+	child->regs.rsi = current->regs.rsi;
+
+	child->regs.entry_cs = 0x2b;
+	child->regs.entry_ss = 0x23;
+	child->entry_rip = (u64)th_func;
+
+	return 0;
 }
 
 long invoke_sync_signal(int signo, u64 *ustackp, u64 *urip)
 {
-	struct exec_context *current = get_current_ctx();
-	if (current->sighandlers[signo] != NULL);
 
-   /*If signal handler is registered, manipulate user stack and RIP to execute signal handler*/
-   /*ustackp and urip are pointers to user RSP and user RIP in the exception/interrupt stack*/
-   printf("Called signal with ustackp=%x urip=%x\n", *ustackp, *urip);
-   /*Default behavior is exit( ) if sighandler is not registered for SIGFPE or SIGSEGV.
-    Ignore for SIGALRM*/
-    if(signo != SIGALRM)
-      do_exit();
+
+/*If signal handler is registered, manipulate user stack and RIP to execute signal handler*/
+/*ustackp and urip are pointers to user RSP and user RIP in the exception/interrupt stack*/
+/*Default behavior is exit( ) if sighandler is not registered for SIGFPE or SIGSEGV.
+Ignore for SIGALRM*/
+
+    	struct exec_context *current = get_current_ctx();
+	printf("Called signal with ustackp=%x urip=%x\n", *ustackp, *urip);
+
+	if(signo != SIGALRM && (current->sighandlers[signo] == NULL))
+		do_exit();
+
+	// Main routine
+	if (current->sighandlers[signo] != NULL) {
+		*(u64 *)(*ustackp) = *urip + 4;		// Confirm whether 4
+		*urip = (u64)current->sighandlers[signo];
+	}
+
+	return 0;
 }
+
 /*system call handler for signal, to register a handler*/
 long do_signal(int signo, unsigned long handler)
 {
 	struct exec_context *current = get_current_ctx();
-	current->sighandlers[signo] = handler;
-	return 0;
+	current->sighandlers[signo] = (void *)handler;
+	return 0; // TODO: Check the exact return value
 }
 
 /* system call handler for alarm */
