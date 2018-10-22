@@ -1,4 +1,5 @@
 #include<context.h>
+#include<init.h>
 #include<memory.h>
 #include<schedule.h>
 #include<apic.h>
@@ -7,7 +8,7 @@
 
 static u64 numticks;
 
-static void save_current_context(struct exec_context *current,
+static void switch_context_timer(struct exec_context *current,
 	struct exec_context *next, u64 *rrsp, u64 *rrbp)
 {
 	// Save the current context GPRs from stack
@@ -17,6 +18,7 @@ static void save_current_context(struct exec_context *current,
 	current->regs.rcx = *(rrsp + 3);
 	current->regs.rbx = *(rrsp + 4);
 	current->regs.rax = *(rrsp + 5);
+
 	current->regs.r15 = *(rrsp + 6);
 	current->regs.r14 = *(rrsp + 7);
 	current->regs.r13 = *(rrsp + 8);
@@ -40,6 +42,7 @@ static void save_current_context(struct exec_context *current,
 	*(rrsp + 3) = next->regs.rcx;
 	*(rrsp + 4) = next->regs.rbx;
 	*(rrsp + 5) = next->regs.rax;
+
 	*(rrsp + 6) = next->regs.r15;
 	*(rrsp + 7) = next->regs.r14;
 	*(rrsp + 8) = next->regs.r13;
@@ -55,20 +58,89 @@ static void save_current_context(struct exec_context *current,
 	*(rrbp + 3) = next->regs.entry_rflags;
 	*(rrbp + 4) = next->regs.entry_rsp;
 	*(rrbp + 5) = next->regs.entry_ss;
+
+	return;
 }
 
-static void schedule_context(struct exec_context *next)
+
+static void switch_context_sleep(struct exec_context *current,
+	struct exec_context *next, u64 *rrbp)
 {
-	 /*Your code goes in here. get_current_ctx() still returns the old context*/
-	 struct exec_context *current = get_current_ctx();
-	 printf("scheduling: old pid = %d  new pid  = %d\n",
-	 current->pid, next->pid); /*XXX: Don't remove*/
-	/*These two lines must be executed*/
-	 set_tss_stack_ptr(next);
-	 set_current_ctx(next);
-	/*Your code for scheduling context*/
-	 return;
+	// Save the current context GPRs from stack  (redundant comment, LOL)
+	current->regs.rbp = *(rrbp + 10);
+	current->regs.rdi = *(rrbp + 11);
+	current->regs.rsi = *(rrbp + 12);
+	current->regs.rdx = *(rrbp + 13);
+	current->regs.rcx = *(rrbp + 14);
+	current->regs.rbx = *(rrbp + 15);
+
+	current->regs.r15 = *(rrbp + 2);
+	current->regs.r14 = *(rrbp + 3);
+	current->regs.r13 = *(rrbp + 4);
+	current->regs.r12 = *(rrbp + 5);
+	current->regs.r11 = *(rrbp + 6);
+	current->regs.r10 = *(rrbp + 7);
+	current->regs.r9 = *(rrbp + 8);
+	current->regs.r8 = *(rrbp + 9);
+
+	current->regs.entry_rip = *(rrbp + 16);
+	current->regs.entry_cs = *(rrbp + 17);
+	current->regs.entry_rflags = *(rrbp + 18);
+	current->regs.entry_rsp = *(rrbp + 19);
+	current->regs.entry_ss = *(rrbp + 20);
+
+	// Set the GPRs of next context to stack
+	*(rrbp + 10) = next->regs.rbp;
+	*(rrbp + 11) = next->regs.rdi;
+	*(rrbp + 12) = next->regs.rsi;
+	*(rrbp + 13) = next->regs.rdx;
+	*(rrbp + 14) = next->regs.rcx;
+	*(rrbp + 15) = next->regs.rbx;
+
+	*(rrbp + 2) = next->regs.r15;
+	*(rrbp + 3) = next->regs.r14;
+	*(rrbp + 4) = next->regs.r13;
+	*(rrbp + 5) = next->regs.r12;
+	*(rrbp + 6) = next->regs.r11;
+	*(rrbp + 7) = next->regs.r10;
+	*(rrbp + 8) = next->regs.r9;
+	*(rrbp + 9) = next->regs.r8;
+
+	*(rrbp + 16) = next->regs.entry_rip;
+	*(rrbp + 17) = next->regs.entry_cs;
+	*(rrbp + 18) = next->regs.entry_rflags;
+	*(rrbp + 19) = next->regs.entry_rsp;
+	*(rrbp + 20) = next->regs.entry_ss;
+
+	return;
 }
+
+static void switch_context_exit(struct exec_context *next, u64 *rrbp) {
+
+	*(rrbp) = next->regs.entry_ss;
+	*(rrbp - 1) = next->regs.entry_rsp;
+	*(rrbp - 2) = next->regs.entry_rflags;
+	*(rrbp - 3) = next->regs.entry_cs;
+	*(rrbp - 4) = next->regs.entry_rip;
+
+	*(rrbp - 5) = next->regs.rbx;
+	*(rrbp - 6) = next->regs.rcx;
+	*(rrbp - 7) = next->regs.rdx;
+	*(rrbp - 8) = next->regs.rsi;
+	*(rrbp - 9) = next->regs.rdi;
+	*(rrbp - 10) = next->regs.rbp;
+
+	*(rrbp - 11) = next->regs.r8;
+	*(rrbp - 12) = next->regs.r9;
+	*(rrbp - 13) = next->regs.r10;
+	*(rrbp - 14) = next->regs.r11;
+	*(rrbp - 15) = next->regs.r12;
+	*(rrbp - 16) = next->regs.r13;
+	*(rrbp - 17) = next->regs.r14;
+	*(rrbp - 18) = next->regs.r15;
+	return;
+}
+
 
 static struct exec_context *pick_next_context(struct exec_context *list)
 {
@@ -83,32 +155,6 @@ static struct exec_context *pick_next_context(struct exec_context *list)
 	return list;
 }
 
-// Scheduling routine
-static void schedule()
-{
-	printf("reached schedule() function\n");
-	struct exec_context *next;
-	struct exec_context *current = get_current_ctx();
-	struct exec_context *list = get_ctx_list();
-	next = pick_next_context(list);
-	schedule_context(next);
-}
-
-static void do_sleep_and_alarm_account()
-{
- /*All processes in sleep() must decrement their sleep count*/
-	struct exec_context *list = get_ctx_list();
-
-	for (int i = 0; i < MAX_PROCESSES; i++)
-		if (list[i].state == WAITING && list[i].ticks_to_sleep != 0)
-			list[i].ticks_to_sleep--;
-
-	for (int i = 0; i < MAX_PROCESSES; i++)
-		if (list[i].state == RUNNING && list[i].ticks_to_alarm != 0)
-			list[i].ticks_to_alarm--;
-
-	return;
-}
 
 /*The five functions above are just a template. You may change the signatures as you wish*/
 void handle_timer_tick()
@@ -138,14 +184,14 @@ void handle_timer_tick()
 
 	u64 *saved_stk;
 	asm volatile(
-		"mov %%rsp, %0"
+		"mov %%rsp, %0;"
 		:"=r" (saved_stk)
 		::"memory"
 	);
 
 	u64 *baseptr;
 	asm volatile(
-		"mov %%rbp, %0"
+		"mov %%rbp, %0;"
 		:"=r" (baseptr)
 		::"memory"
 	);
@@ -154,25 +200,46 @@ void handle_timer_tick()
 	struct exec_context *list = get_ctx_list();
 	struct exec_context *swapper = get_ctx_by_pid(0);
 
+	int process_found = 0;
 	for(int i = 1; i < MAX_PROCESSES; i++) {
 		if(((list + i)->state == WAITING) && ((list + i)->ticks_to_sleep > 0)) {
 			(list + i)->ticks_to_sleep--;
 			if ((list + i)->ticks_to_sleep == 0)
 				(list + i)->state = READY;
 		}
+
+		if (i && (list + i)->state == READY && i != current->pid)
+			process_found = 1;
 	}
 
-	if (current->ticks_to_alarm) {
+	if (current->ticks_to_alarm && current->alarm_config_time) {
 		current->ticks_to_alarm--;
 		if (!(current->ticks_to_alarm) && (current->sighandlers[SIGALRM] != NULL)) {
 			current->ticks_to_alarm = current->alarm_config_time;
-			invoke_sync_signal(SIGALRM, baseptr+4, baseptr+1);
+			invoke_sync_signal(SIGALRM, baseptr + 4, baseptr + 1);
 		}
 	}
 
 	asm volatile("cli;"
 	        :::"memory");
 	printf("Got a tick. #ticks = %u\n", numticks++);   /*XXX Do not modify this line*/
+
+	// We found a process, schedule it while the timer interrupt arrives
+	if (process_found) {
+		struct exec_context *next = pick_next_context(list);
+		printf("scheduling: old pid = %d  new pid  = %d\n",
+		current->pid, next->pid); /*XXX: Don't remove*/
+		/*These two lines must be executed*/
+		/*Your code for scheduling context*/
+
+		switch_context_timer(current, next, saved_stk, baseptr);
+		set_tss_stack_ptr(next);
+		set_current_ctx(next);
+
+		next->state = RUNNING;
+		current->state = READY;
+	}
+
 	ack_irq();  /*acknowledge the interrupt, before calling iretq */
 	asm volatile (  "mov %0, %%rsp;"
 		"pop %%rdi;"
@@ -197,6 +264,40 @@ void handle_timer_tick()
 	);
 }
 
+static void exit_helper(){
+    u64* baseptr;
+    asm volatile (  "mov %%rbp, %0;"
+                    :"=r" (baseptr)
+                    :
+                    :"memory"
+    );
+
+    os_pfn_free(OS_PT_REG, *(baseptr + 2));
+
+    asm volatile (  "mov %%rbp, %%rsp;"
+                    "pop %%r15;"
+                    "pop %%r15;"
+                    "pop %%r15;"
+                    "pop %%r15;"
+                    "pop %%r14;"
+                    "pop %%r13;"
+                    "pop %%r12;"
+                    "pop %%r11;"
+                    "pop %%r10;"
+                    "pop %%r9;"
+                    "pop %%r8;"
+                    "pop %%rbp;"
+                    "pop %%rdi;"
+                    "pop %%rsi;"
+                    "pop %%rdx;"
+                    "pop %%rcx;"
+                    "pop %%rbx;"
+                    "iretq;"
+                    :::"memory"
+    );
+    return;
+}
+
 void do_exit()
 {
   /*You may need to invoke the scheduler from here if there are
@@ -208,36 +309,85 @@ void do_exit()
 
 	struct exec_context *current = get_current_ctx();
 	struct exec_context *list = get_ctx_list();
-	os_pfn_free(OS_PT_REG, current->os_stack_pfn);
+	struct exec_context *next = pick_next_context(next);
+
 	current->state = UNUSED;
 
-	for (int i = 1; i < MAX_PROCESSES; i++)
-		if ((list + i)->state == READY)
-			schedule();
+	// No other process is available, schedule the swapper
+	if (next == list)
+		do_cleanup();
 
-	do_cleanup();  /*Call this conditionally, see comments above*/
+	u64 *next_rbp = (u64 *)osmap(next->os_stack_pfn);
+	u64 *next_stk = next_rbp - 19;
+
+	// Else, schedule the other process
+	printf("scheduling: old pid = %d  new pid  = %d\n",
+		current->pid, next->pid);
+
+	set_tss_stack_ptr(next);
+	set_current_ctx(next);
+	next->state = RUNNING;
+
+	*(next_rbp) = next->regs.entry_ss;
+	*(next_rbp - 1) = next->regs.entry_rsp;
+	*(next_rbp - 2) = next->regs.entry_rflags;
+	*(next_rbp - 3) = next->regs.entry_cs;
+	*(next_rbp - 4) = next->regs.entry_rip;
+
+	*(next_rbp - 5) = next->regs.rbx;
+	*(next_rbp - 6) = next->regs.rcx;
+	*(next_rbp - 7) = next->regs.rdx;
+	*(next_rbp - 8) = next->regs.rsi;
+	*(next_rbp - 9) = next->regs.rdi;
+	*(next_rbp - 10) = next->regs.rbp;
+
+	*(next_rbp - 11) = next->regs.r8;
+	*(next_rbp - 12) = next->regs.r9;
+	*(next_rbp - 13) = next->regs.r10;
+	*(next_rbp - 14) = next->regs.r11;
+	*(next_rbp - 15) = next->regs.r12;
+	*(next_rbp - 16) = next->regs.r13;
+	*(next_rbp - 17) = next->regs.r14;
+	*(next_rbp - 18) = next->regs.r15;
+
+	*next_stk = current->os_stack_pfn;
+
+	os_pfn_free(OS_PT_REG, current->os_stack_pfn);
+	// Set stack pointer to the top of next stack frame
+	asm volatile(
+		"mov %0, %%rsp;"
+		::"r" (next_stk)
+		:"memory"
+	);
+
+	exit_helper();
+	return;
 }
 
 /*system call handler for sleep*/
 long do_sleep(u32 ticks)
 {
 	struct exec_context *current = get_current_ctx();
-	struct exec_context *swapper = get_ctx_by_pid(0);	// Confirm whether swapper
+	struct exec_context *list = get_ctx_list();
+	struct exec_context *next = pick_next_context(list);
 
 	current->ticks_to_sleep = ticks;
 	current->state = WAITING;
 
-	// Modify the states for swapper
-	swapper->state = RUNNING;
+	u64 *sysrbp;
+	asm volatile(
+		"mov %%rbp, %0;"
+		:"=r" (sysrbp)
+		::"memory"
+	);
 
-	// Do we need to do this?
-	set_tss_stack_ptr(swapper);
-	set_current_ctx(swapper);
+	switch_context_sleep(current, next, (u64 *)*sysrbp);
+	printf("scheduling: old pid = %d  new pid  = %d\n", current->pid, next->pid);
+	set_tss_stack_ptr(next);
+	set_current_ctx(next);
+	next->state = RUNNING;
 
-
-
-	// save_current_context();
-	schedule();
+	return ticks;
 }
 
 /*
@@ -249,16 +399,11 @@ long do_clone(void *th_func, void *user_stack)
 	struct exec_context *current = get_current_ctx();
 	struct exec_context *child = get_new_ctx();
 
-	/* Either copy from the parent or initialize according to the question */
-	printf("New PID: %d\n", child->pid);
 	int len = strlen(current->name);
-	// char cpid[1];
-
 	child->os_stack_pfn = os_pfn_alloc(OS_PT_REG);
 	memcpy(child->name, current->name, strlen(current->name));
-	// snprintf(cpid, "%d", current->pid, 1);
-	// memcpy(child->name + strlen(current->name), cpid, strlen(cpid));
-	// TODO: Fix this
+	child->name[len] = '0' + child->pid;
+	child->name[len+1] = 0;
 	printf("Child name: %s\n", child->name);
 
 	// Copy from parent
@@ -266,15 +411,16 @@ long do_clone(void *th_func, void *user_stack)
 	child->state = READY;			// Ready to be scheduled
 	child->os_rsp = current->os_rsp;
 	child->used_mem = current->used_mem;
-	child->ticks_to_sleep = current->ticks_to_sleep;
-	child->ticks_to_alarm = current->ticks_to_alarm;
-	child->alarm_config_time = current->alarm_config_time;
+
+	// Config times initialized to 0
+	child->ticks_to_sleep = 0x0;
+	child->ticks_to_alarm = 0x0;
+	child->alarm_config_time = 0x0;
+	child->pending_signal_bitmap = 0x0;
 
 	// Signal handlers are also copied
 	for (int i = 0; i < MAX_SIGNALS; i++)
 		child->sighandlers[i] = current->sighandlers[i];
-	// But not the pending signals
-	child->pending_signal_bitmap = 0x0;
 
 	// Now, copy the user_regs registers
 	child->regs.r15 = current->regs.r15;
@@ -318,9 +464,9 @@ long do_clone(void *th_func, void *user_stack)
 	child->regs.entry_rflags = current->regs.entry_rflags;
 	child->regs.entry_rip = (u64)th_func;
 	child->regs.entry_rsp = (u64)user_stack;
-	child->regs.rbp = (u64)user_stack;	// TODO: Check the validity
+	child->regs.rbp = (u64)user_stack;
 
-	return 0;
+	return child->pid;
 }
 
 long invoke_sync_signal(int signo, u64 *ustackp, u64 *urip)
