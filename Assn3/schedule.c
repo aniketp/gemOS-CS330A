@@ -145,10 +145,10 @@ static void switch_context_exit(struct exec_context *next, u64 *rrbp) {
 static struct exec_context *pick_next_context(struct exec_context *list)
 {
 	struct exec_context *current = get_current_ctx();
-	u32 cpid = current->pid;
+	u32 curpid = current->pid;
 
-	for (int i = cpid + 1; i <= cpid + MAX_PROCESSES; i++)
-		if (((list + (i % MAX_PROCESSES))->state == READY) && (i != MAX_PROCESSES))
+	for (int i = curpid + 1; i <= curpid + MAX_PROCESSES; i++)
+		if ((list[i % MAX_PROCESSES].state == READY) && (i != MAX_PROCESSES))
 			return (list + (i % MAX_PROCESSES));
 
 	// Return the swapper
@@ -212,6 +212,7 @@ void handle_timer_tick()
 			process_found = 1;
 	}
 
+	// Put this in loop?
 	if (current->ticks_to_alarm && current->alarm_config_time) {
 		current->ticks_to_alarm--;
 		if (!(current->ticks_to_alarm) && (current->sighandlers[SIGALRM] != NULL)) {
@@ -264,7 +265,7 @@ void handle_timer_tick()
 	);
 }
 
-static void exit_helper(){
+static void exit_restore(){
     u64* baseptr;
     asm volatile (  "mov %%rbp, %0;"
                     :"=r" (baseptr)
@@ -275,9 +276,9 @@ static void exit_helper(){
     os_pfn_free(OS_PT_REG, *(baseptr + 2));
 
     asm volatile (  "mov %%rbp, %%rsp;"
-                    "pop %%r15;"
-                    "pop %%r15;"
-                    "pop %%r15;"
+                    "pop %%rax;"
+                    "pop %%rax;"
+                    "pop %%rax;"
                     "pop %%r15;"
                     "pop %%r14;"
                     "pop %%r13;"
@@ -314,8 +315,9 @@ void do_exit()
 	current->state = UNUSED;
 
 	// No other process is available, schedule the swapper
-	if (next == list)
+	if (next->pid == list->pid) {
 		do_cleanup();
+	}
 
 	u64 *next_rbp = (u64 *)osmap(next->os_stack_pfn);
 	u64 *next_stk = next_rbp - 19;
@@ -352,7 +354,7 @@ void do_exit()
 
 	*next_stk = current->os_stack_pfn;
 
-	os_pfn_free(OS_PT_REG, current->os_stack_pfn);
+	// os_pfn_free(OS_PT_REG, current->os_stack_pfn);
 	// Set stack pointer to the top of next stack frame
 	asm volatile(
 		"mov %0, %%rsp;"
@@ -360,7 +362,7 @@ void do_exit()
 		:"memory"
 	);
 
-	exit_helper();
+	exit_restore();
 	return;
 }
 
@@ -369,10 +371,10 @@ long do_sleep(u32 ticks)
 {
 	struct exec_context *current = get_current_ctx();
 	struct exec_context *list = get_ctx_list();
-	struct exec_context *next = pick_next_context(list);
-
 	current->ticks_to_sleep = ticks;
 	current->state = WAITING;
+
+	struct exec_context *next = pick_next_context(list);
 
 	u64 *sysrbp;
 	asm volatile(
@@ -497,8 +499,9 @@ Ignore for SIGALRM*/
 long do_signal(int signo, unsigned long handler)
 {
 	struct exec_context *current = get_current_ctx();
+	long rethandler = (long)current->sighandlers[signo];
 	current->sighandlers[signo] = (void *)handler;
-	return 0; // TODO: Check the exact return value
+	return rethandler;
 }
 
 /* system call handler for alarm */
