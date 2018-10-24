@@ -11,6 +11,7 @@
 #include<idt.h>
 
 static u64 numticks;
+static u64 free_os_pfn[MAX_PROCESSES] = {0x0};
 
 static void switch_context_timer(struct exec_context *current,
 	struct exec_context *next, u64 *rrsp, u64 *rrbp)
@@ -152,12 +153,11 @@ static struct exec_context *pick_next_context(struct exec_context *list)
 	struct exec_context *current = get_current_ctx();
 	u32 curpid = current->pid;
 
-	for (int i = curpid + 1; i <= curpid + MAX_PROCESSES; i++)
-		if ((list[i % MAX_PROCESSES].state == READY) && (i % MAX_PROCESSES != 0)) {
+	for (int i = curpid + 1; i < curpid + MAX_PROCESSES; i++)
+		if ((list[i % MAX_PROCESSES].state == READY) && (i % MAX_PROCESSES != 0))
 			return (list + (i % MAX_PROCESSES));
-		}
 
-	// Return the swapper
+	// TODO: Return the swapper
 	return list;
 }
 
@@ -182,11 +182,12 @@ void handle_timer_tick()
 		"push %%rdi;"
 		:::"memory"
 	);
- /*
-   This is the timer interrupt handler.
-   You should account timer ticks for alarm and sleep
-   and invoke schedule
- */
+
+	 /*
+	   This is the timer interrupt handler.
+	   You should account timer ticks for alarm and sleep
+	   and invoke schedule
+	 */
 
 	u64 *saved_stk;
 	asm volatile(
@@ -202,6 +203,13 @@ void handle_timer_tick()
 		::"memory"
 	);
 
+	for (int i = 1; i < MAX_PROCESSES; i++) {
+		if (free_os_pfn[i]) {
+			os_pfn_free(OS_PT_REG, free_os_pfn[i]);
+			free_os_pfn[i] = 0x0;
+		}
+	}
+
 	struct exec_context *current = get_current_ctx();
 	struct exec_context *list = get_ctx_list();
 	struct exec_context *swapper = get_ctx_by_pid(0);
@@ -209,8 +217,8 @@ void handle_timer_tick()
 							// to get the swapper (it's safe)
 
 
-	asm volatile("cli;"
-	        :::"memory");
+	// asm volatile("cli;"
+	//         :::"memory");
 	printf("Got a tick. #ticks = %u\n", ++numticks);   /*XXX Do not modify this line*/
 
 
@@ -275,40 +283,40 @@ void handle_timer_tick()
 	);
 }
 
-static void exit_restore(){
-    u64* baseptr;
-    asm volatile (  "mov %%rbp, %0;"
-                    :"=r" (baseptr)
-                    :
-                    :"memory"
-    );
-
-    os_pfn_free(OS_PT_REG, *(baseptr + 2));
-
-    asm volatile (  "mov %%rbp, %%rsp;"
-                    "pop %%rax;"
-                    "pop %%rax;"
-                    "pop %%rax;"
-                    "pop %%r15;"
-                    "pop %%r14;"
-                    "pop %%r13;"
-                    "pop %%r12;"
-                    "pop %%r11;"
-                    "pop %%r10;"
-                    "pop %%r9;"
-                    "pop %%r8;"
-                    "pop %%rbp;"
-                    "pop %%rdi;"
-                    "pop %%rsi;"
-                    "pop %%rdx;"
-                    "pop %%rcx;"
-                    "pop %%rbx;"
-		    "pop %%rax;"
-                    "iretq;"
-                    :::"memory"
-    );
-    return;
-}
+// static void exit_restore(){
+//     u64* baseptr;
+//     asm volatile (  "mov %%rbp, %0;"
+//                     :"=r" (baseptr)
+//                     :
+//                     :"memory"
+//     );
+//
+//     os_pfn_free(OS_PT_REG, *(baseptr + 2));
+//
+//     asm volatile (  "mov %%rbp, %%rsp;"
+//                     "pop %%rax;"
+//                     "pop %%rax;"
+//                     "pop %%rax;"
+//                     "pop %%r15;"
+//                     "pop %%r14;"
+//                     "pop %%r13;"
+//                     "pop %%r12;"
+//                     "pop %%r11;"
+//                     "pop %%r10;"
+//                     "pop %%r9;"
+//                     "pop %%r8;"
+//                     "pop %%rbp;"
+//                     "pop %%rdi;"
+//                     "pop %%rsi;"
+//                     "pop %%rdx;"
+//                     "pop %%rcx;"
+//                     "pop %%rbx;"
+// 		    "pop %%rax;"
+//                     "iretq;"
+//                     :::"memory"
+//     );
+//     return;
+// }
 
 void do_exit()
 {
@@ -321,61 +329,102 @@ void do_exit()
 
 	struct exec_context *current = get_current_ctx();
 	struct exec_context *list = get_ctx_list();
-	struct exec_context *next = pick_next_context(list);
-
 	current->state = UNUSED;
 
-	// No other process is available, schedule the swapper
-	if (next->pid == 0)
+	int available = 0;
+	for (int i = 1; i < MAX_PROCESSES; i++) 	// Check for pointers
+		if ((list + i)->pid != 0 && (list + i)->state != UNUSED)
+			available = 1;
+
+	free_os_pfn[current->pid] = current->os_stack_pfn;
+	if (available == 0)
 		do_cleanup();
 
-	u64 *next_rbp = (u64 *)osmap(next->os_stack_pfn);
-	u64 *next_stk = next_rbp - 20;
-	int saved_os_pfn = current->os_stack_pfn;
+	else {
+		u64 *sysrbp;
+		asm volatile(
+			"mov %%rbp, %0;"
+			:"=r" (sysrbp)
+			::"memory"
+		);
 
-	// Else, schedule the other process
-	printf("scheduling: old pid = %d  new pid  = %d\n",
-		current->pid, next->pid);
+		u64 *do_sysrbp = (u64 *)*sysrbp;
+		struct exec_context *next = pick_next_context(list);
+		switch_context_sleep(current, next, do_sysrbp);
+		printf("scheduling: old pid = %d  new pid  = %d\n", current->pid, next->pid);
+		set_tss_stack_ptr(next);
+		set_current_ctx(next);
+		next->state = RUNNING;
 
-	set_tss_stack_ptr(next);
-	set_current_ctx(next);
-	next->state = RUNNING;
+		asm volatile (  "mov %0, %%rsp;"
+				"pop %%r15;"
+				"pop %%r14;"
+				"pop %%r13;"
+				"pop %%r12;"
+				"pop %%r11;"
+				"pop %%r10;"
+				"pop %%r9;"
+				"pop %%r8;"
+				"pop %%rbp;"
+				"pop %%rdi;"
+				"pop %%rsi;"
+				"pop %%rdx;"
+				"pop %%rcx;"
+				"pop %%rbx;"
+				"pop %%rax;"
+				"iretq;"
+				::"r" (do_sysrbp + 1)
+				:"memory"
+		);
+	}
+		// u64 *next_rbp = (u64 *)osmap(next->os_stack_pfn);
+		// u64 *next_stk = next_rbp - 20;
+		// int saved_os_pfn = current->os_stack_pfn;
+		//
+		//
+		// // Else, schedule the other process
+		// printf("scheduling: old pid = %d  new pid  = %d\n",
+		// 	current->pid, next->pid);
+		//
+		// set_tss_stack_ptr(next);
+		// set_current_ctx(next);
+		// next->state = RUNNING;
 
-	*(next_rbp) = next->regs.entry_ss;
-	*(next_rbp - 1) = next->regs.entry_rsp;
-	*(next_rbp - 2) = next->regs.entry_rflags;
-	*(next_rbp - 3) = next->regs.entry_cs;
-	*(next_rbp - 4) = next->regs.entry_rip;
-
-	*(next_rbp - 5) = next->regs.rbx;
-	*(next_rbp - 6) = next->regs.rbx;
-	*(next_rbp - 7) = next->regs.rcx;
-	*(next_rbp - 8) = next->regs.rdx;
-	*(next_rbp - 9) = next->regs.rsi;
-	*(next_rbp - 10) = next->regs.rdi;
-	*(next_rbp - 11) = next->regs.rbp;
-
-	*(next_rbp - 12) = next->regs.r8;
-	*(next_rbp - 13) = next->regs.r9;
-	*(next_rbp - 14) = next->regs.r10;
-	*(next_rbp - 15) = next->regs.r11;
-	*(next_rbp - 16) = next->regs.r12;
-	*(next_rbp - 17) = next->regs.r13;
-	*(next_rbp - 18) = next->regs.r14;
-	*(next_rbp - 19) = next->regs.r15;
-
-	*next_stk = saved_os_pfn;
-
-	// os_pfn_free(OS_PT_REG, current->os_stack_pfn);
-	// Set stack pointer to the top of next stack frame
-	asm volatile(
-		"mov %0, %%rsp;"
-		::"r" (next_stk)
-		:"memory"
-	);
-
-	exit_restore();
-	return;
+	// *(next_rbp) = next->regs.entry_ss;
+	// *(next_rbp - 1) = next->regs.entry_rsp;
+	// *(next_rbp - 2) = next->regs.entry_rflags;
+	// *(next_rbp - 3) = next->regs.entry_cs;
+	// *(next_rbp - 4) = next->regs.entry_rip;
+	//
+	// *(next_rbp - 5) = next->regs.rbx;
+	// *(next_rbp - 6) = next->regs.rbx;
+	// *(next_rbp - 7) = next->regs.rcx;
+	// *(next_rbp - 8) = next->regs.rdx;
+	// *(next_rbp - 9) = next->regs.rsi;
+	// *(next_rbp - 10) = next->regs.rdi;
+	// *(next_rbp - 11) = next->regs.rbp;
+	//
+	// *(next_rbp - 12) = next->regs.r8;
+	// *(next_rbp - 13) = next->regs.r9;
+	// *(next_rbp - 14) = next->regs.r10;
+	// *(next_rbp - 15) = next->regs.r11;
+	// *(next_rbp - 16) = next->regs.r12;
+	// *(next_rbp - 17) = next->regs.r13;
+	// *(next_rbp - 18) = next->regs.r14;
+	// *(next_rbp - 19) = next->regs.r15;
+	//
+	// *next_stk = saved_os_pfn;
+	//
+	// // os_pfn_free(OS_PT_REG, current->os_stack_pfn);
+	// // Set stack pointer to the top of next stack frame
+	// asm volatile(
+	// 	"mov %0, %%rsp;"
+	// 	::"r" (next_stk)
+	// 	:"memory"
+	// );
+	//
+	// exit_restore();
+	// return;
 }
 
 /*system call handler for sleep*/
@@ -421,8 +470,7 @@ long do_sleep(u32 ticks)
 			"pop %%rbx;"
 			"pop %%rax;"
 			"iretq;"
-			:
-			:"r" (do_sysrbp + 1)
+			::"r" (do_sysrbp + 1)
 			:"memory"
 	);
 
@@ -435,20 +483,35 @@ long do_sleep(u32 ticks)
 */
 long do_clone(void *th_func, void *user_stack)
 {
+	u64 *sysrbp;
+	asm volatile(
+		"mov %%rbp, %0;"
+		:"=r" (sysrbp)
+		::"memory"
+	);
+
+	u64 *do_sysrbp = (u64 *)*sysrbp;
+
 	struct exec_context *current = get_current_ctx();
 	struct exec_context *child = get_new_ctx();
 
 	int len = strlen(current->name);
 	child->os_stack_pfn = os_pfn_alloc(OS_PT_REG);
-	memcpy(child->name, current->name, strlen(current->name));
-	child->name[len] = '0' + child->pid;
-	child->name[len+1] = 0;
-	// printf("Child name: %s\n", child->name);
+	memcpy(child->name, current->name, strlen(current->name) - 1);
+
+	if (child->pid < 10) {
+		child->name[len - 1] = '0' + child->pid;
+		child->name[len] = 0;
+	} else {
+		child->name[len - 1] = '1';
+		child->name[len] = (child->pid % 10);
+		child->name[len + 1] = 0;
+	}
 
 	// Copy from parent
 	child->state = READY;			// Ready to be scheduled
 	child->pgd = current->pgd;
-	child->os_rsp = current->os_rsp;	// TODO: Check the necessity
+	child->os_rsp = (u64)osmap(child->os_stack_pfn);
 	child->used_mem = current->used_mem;
 
 	// Config times initialized to 0
@@ -500,7 +563,7 @@ long do_clone(void *th_func, void *user_stack)
 
 	child->regs.entry_cs = 0x23;
 	child->regs.entry_ss = 0x2b;
-	child->regs.entry_rflags = current->regs.entry_rflags;
+	child->regs.entry_rflags = *(do_sysrbp + 18);
 	child->regs.entry_rip = (u64)th_func;
 	child->regs.entry_rsp = (u64)user_stack;
 	child->regs.rbp = (u64)user_stack;
