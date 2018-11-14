@@ -78,8 +78,8 @@ struct object *objs;
 struct hashobj *hashTable[MAX_OBJECT] = {NULL};
 struct cache_obj *cacheHashTable[CACHE_HTSIZE];
 
-unsigned int inodemap[MAX_INODES/4];
-unsigned int blockmap[MAX_BLOCKS/4];		// Bitmap instead of Bytemap
+unsigned int inodemap[MAX_INODES/8];
+unsigned int blockmap[MAX_BLOCKS/8];		// Bitmap instead of Bytemap
 unsigned int cachemap[MAX_OBJECT];
 
 u64 metadata_store = 0;
@@ -88,18 +88,17 @@ struct cache_obj *c_start = NULL;
 struct cache_obj *c_end = NULL;
 u32 c_size = 0;
 
-static u32 hash(char *key) {
-    return 0;
+static u32 hash(const char *key) {
+	u32 hashval = 0;
+	for (int i = 0; i < 32; i++)
+		hashval = ((hashval * 33) + key[i]) % MAX_OBJECT;
+	return hashval;
 }
 
 u32 cache_hash(u32 disk_block){
     return (disk_block % CACHE_HTSIZE);
 }
 
-static void init_object_cached(struct object *obj)
-{
-    return;
-}
 static void remove_object_cached(struct object *obj)
 {
     return;
@@ -231,7 +230,7 @@ void insert_block_in_cache_hash_table(struct cache_obj *node, u32 disk_block) {
     u32 val = cache_hash(disk_block);
     struct cache_obj* temp = cacheHashTable[val];
     struct cache_obj* parent = cacheHashTable[val];
-    while(temp != NULL) {
+    while (temp != NULL) {
         parent = temp;
         temp = temp->next;
     }
@@ -247,7 +246,7 @@ void insert_block_in_cache_hash_table(struct cache_obj *node, u32 disk_block) {
 }
 
 struct cache_obj *
-get_c_block_add(struct objfs_state *objfs, u32 disk_block) {
+retrieve_block_from_cache(struct objfs_state *objfs, u32 disk_block) {
     if (check_disk_block_in_cache(disk_block)) {
         struct cache_obj *node = get_cache_obj(disk_block);
         struct cache_obj *newnode = (struct cache_obj *)(calloc(sizeof(struct cache_obj), 1));
@@ -262,7 +261,7 @@ get_c_block_add(struct objfs_state *objfs, u32 disk_block) {
 }
 
 struct cache_obj *
-put_c_block_add(struct objfs_state *objfs, u32 disk_block, u64 cache_block) {
+insert_block_to_cache(struct objfs_state *objfs, u32 disk_block, u64 cache_block) {
 
     if (check_disk_block_in_cache(disk_block)) {
         dprintf("Disk block was already loaded in cache");
@@ -272,7 +271,7 @@ put_c_block_add(struct objfs_state *objfs, u32 disk_block, u64 cache_block) {
     new_cache_node->left = NULL;
     new_cache_node->right = NULL;
 
-    // Is this notation correct ?
+    // Is this notation correct ? I think so
     new_cache_node->disk_addr = disk_block;
     new_cache_node->cache_addr = cache_block;
     if (c_size >= CACHE_HTSIZE) {
@@ -287,51 +286,52 @@ put_c_block_add(struct objfs_state *objfs, u32 disk_block, u64 cache_block) {
 }
 
 
-void put_in_cache_hash_table(u32 d_block,struct cache_obj* new_cache_obj)
+void put_in_cache_hash_table(u32 disk_block, struct cache_obj *new_obj)
 {
-	u32 hash_val = cache_hash(d_block);
-    struct cache_obj* temp = cacheHashTable[hash_val];
-    struct cache_obj* parent = cacheHashTable[hash_val];
-    while(temp != NULL)
-    {
-        parent = temp;
-        temp = temp->next;
+	u32 val = cache_hash(disk_block);
+    struct cache_obj *itr = cacheHashTable[val];
+    struct cache_obj *par = itr;
+
+	while (itr != NULL) {
+        par = itr;
+        itr = itr->next;
     }
-    if(parent == NULL)
-    {
-        parent = (struct cache_obj*)calloc(sizeof(struct cache_obj),1);
-        *parent = *new_cache_obj;
-        free(new_cache_obj);
+
+    if (itr == NULL) {
+        par = (struct cache_obj *)calloc(sizeof(struct cache_obj), 1);
+        *par = *new_obj;
+        free(new_obj);
         return;
-    }
-    parent->next = new_cache_obj;
+    } else
+    	par->next = new_obj;
     return;
 }
 
 
 /////////////////////
 
-u32 read_block_anyway(struct objfs_state *objfs, u32 block_no, char *buf) {
+long read_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
 
-    struct cache_obj *new_node = get_c_block_add(objfs, block_no);
-    if(new_node == NULL) {
-        u32 retval = read_block(objfs, block_no, buf);
-        if (retval < 0)
-			return retval;
-        struct cache_obj *new_node = put_c_block_add(objfs, block_no, (u64)buf);
-        return retval;
+    struct cache_obj *new_node = retrieve_block_from_cache(objfs, block_no);
+	u32 obtained_id;
+	if(new_node == NULL) {
+        if ((obtained_id = read_block(objfs, block_no, buf)) < 0);
+        	return -1;
+
+        insert_block_to_cache(objfs, block_no, (u64)buf);
+        return obtained_id;
     }
     memcpy(buf, (char *)(new_node->cache_addr), BLOCK_SIZE);
     return 1;
 }
 
-u32 write_block_anyway(struct objfs_state *objfs, u32 block_no, char *buf) {
+long write_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
 
-    struct cache_obj *new_node = get_c_block_add(objfs, block_no);
+    struct cache_obj *new_node = retrieve_block_from_cache(objfs, block_no);
     if(new_node == NULL) {
-        struct cache_obj *new_node = put_c_block_add(objfs, block_no, (u64)buf);
-        memcpy((void *)new_node->cache_addr, buf, BLOCK_SIZE);
-        new_node->dirty = 1;
+        struct cache_obj *next_node = insert_block_to_cache(objfs, block_no, (u64)buf);
+        memcpy((char *)next_node->cache_addr, buf, BLOCK_SIZE);
+        next_node->dirty = 1;
         return 1;
     }
     memcpy((void *)new_node->cache_addr, buf, BLOCK_SIZE);
@@ -346,7 +346,7 @@ struct object *object_fetch(struct objfs_state *objfs, u32 objid) {
     u32 block_off = ((objid - 2) % OBJECTS_PER_BLOCK) * sizeof(struct object);
 
     struct object buf[BLOCK_SIZE/sizeof(struct object)];
-    if(read_block_anyway(objfs, block_no, ((char*)buf)) < 0)
+    if(read_block_modified(objfs, block_no, ((char*)buf)) < 0)
         return NULL;
 
     struct object* temp = (struct object *)calloc(sizeof(struct object), 1);
@@ -357,6 +357,44 @@ struct object *object_fetch(struct objfs_state *objfs, u32 objid) {
 	else
     	free(temp);
     return NULL;
+}
+
+void insert_to_disk(struct objfs_state *objfs, struct object *obj)
+{
+    u32 base = (B_BLOCKS) + (I_BLOCKS) + (ID_BLOCKS);
+    u32 objid = obj->id;
+    u32 block_no = ((objid-2) / OBJECTS_PER_BLOCK) + base;
+
+    struct object buf[BLOCK_SIZE/sizeof(struct object)];
+    struct object *temp;
+    if(read_block_modified(objfs, block_no, (char *)buf) < 0)
+        return;
+
+    buf[objid] = *obj;
+	// Check does not matter here
+	write_block_modified(objfs, block_no, (char *)buf);
+
+    return;
+}
+
+
+// inserts id in HashIdTable
+void insert_to_hash_table(u32 id, u32 index) {		// TODO: Check the order
+    struct hashobj* temp = hashTable[index];
+    struct hashobj* parent = hashTable[index];
+    while(temp != NULL) {
+        parent = temp;
+        temp = temp->next;
+    }
+    if (parent == hashTable[index]) {
+        hashTable[index] = (struct hashobj *)calloc(sizeof(struct hashobj), 1);
+        hashTable[index]->id = id;
+        return;
+    }
+    parent->next = (struct hashobj *)calloc(sizeof(struct hashobj), 1);
+    parent->next->id = id;
+    return;
+
 }
 
 
@@ -395,14 +433,15 @@ long create_object(const char *key, struct objfs_state *objfs)
 		struct object *obj = object_fetch(objfs, itr->id);
 		if(itr->id && (strcmp(obj->key, key) == 0)) {
 			dprintf("Duplicate object for key: %s and Id: %d found", obj->key, itr->id);
+			free(obj);
 			return -1;
 		}
 		par = itr;
 		itr = itr->next;
 	}
 
-	u32 new_id = fetch_free_id();
-	if (new_id == -1) {
+	u32 new_id = fetch_free_id();		// TODO: Implement this function
+	if (!new_id) {
                dprintf("%s: objstore full: No ID found\n", __func__);
                return -1;
     }
@@ -421,8 +460,10 @@ long create_object(const char *key, struct objfs_state *objfs)
 	else
 		par->next = newnode;
 
-    init_object_cached(newobj);
-    return newnode->id;
+	insert_to_hash_table(new_id, hash(key));
+	insert_to_disk(objfs, newobj);
+	free(newobj);
+    return new_id;
 }
 /*
   One of the users of the object has dropped a reference
@@ -528,7 +569,7 @@ int fillup_size_details(struct stat *buf)
 }
 
 /*
-   Set your private pointeri, anyway you like.
+   Set your private pointeri, modified you like.
 */
 int objstore_init(struct objfs_state *objfs)
 {
