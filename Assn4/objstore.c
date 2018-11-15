@@ -40,12 +40,12 @@ typedef long long s64;
                      }while(0);
 
 // Custom malloc
-#define malloc_y(x, size) do{\
-                      (x) = mmap(NULL, (size) * BLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);\
-                      if((x) == MAP_FAILED)\
-                           (x)=NULL;\
-                  }while(0);
-
+// #define malloc_y(x, size) do{\
+//                       (x) = mmap(NULL, (size) * BLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);\
+//                       if((x) == MAP_FAILED)\
+//                            (x)=NULL;\
+//                   }while(0);
+//
 
 #define free_4k(x) munmap((x), BLOCK_SIZE)
 #define free_y(x, y) munmap((x), (y) * BLOCK_SIZE)
@@ -221,10 +221,11 @@ bool check_disk_block_in_cache(u32 disk_block) {
 void remove_object_from_cache_and_write_back(struct objfs_state *objfs, struct cache_obj* node) {
     if (node->dirty == 1) {
 		void *ptr; malloc_4k(ptr);
-		if(!ptr) return -1;
+		if(!ptr)
+			return;
 
 		// Copy cache_block_address to 4k ptr variable
-		memcpy(ptr, node->cache_addr, BLOCK_SIZE);
+		memcpy(ptr, (void *)node->cache_addr, BLOCK_SIZE);
         if (write_block(objfs, node->disk_addr, (char *)node->cache_addr) < 0)
             dprintf("Error in writing d_block: %d from c_block: %d", node->disk_addr, node->cache_addr);
 		free_4k(ptr);
@@ -433,6 +434,7 @@ void init_object_cached(struct object *obj)
 
 void remove_object_cached (struct object *obj, struct objfs_state* objfs) {
 	// TODO: Modify this (Infact, this is completely wrong)
+	// TODO: Convert the numbers to macros
 	    free_inode_id(obj->id);
 
 	    if (obj->blocknum) {
@@ -800,10 +802,10 @@ long objstore_read(int objid, char *buf, int size, struct objfs_state *objfs, of
   Fillup buf->st_size and buf->st_blocks correctly
   See man 2 stat
 */
-int fillup_size_details(struct stat *buf)
+int fillup_size_details(struct stat *buf, struct objfs_state *objfs)
 {
 	// NOTE: Picked up from provided example implementation
-	struct object *obj = objs + buf->st_ino - 2;
+	struct object *obj = object_fetch(objfs, (u64)buf->st_ino);
 	if (buf->st_ino < 2 || obj->id != buf->st_ino)
 		return -1;
 	buf->st_size = obj->size;
@@ -816,10 +818,15 @@ int fillup_size_details(struct stat *buf)
 /*
    Set your private pointeri, modified you like.
 */
-int objstore_init(struct objfs_state *objfs)
-{
-	// struct object *obj = NULL;
+int objstore_init(struct objfs_state *objfs) {
+	struct object *obj = NULL;
+	c_start = NULL;
+	c_end = NULL;
 
+	char *temp;
+	malloc_4k(temp);
+	if (!temp)
+		return -1;
 	// Make it a new malloc instead (LOL)
 	// malloc_y(hashTable, MAX_OBJECT * (sizeof(struct hashobj)/BLOCK_SIZE));
 	// if (!hashTable) {		// NULL returned
@@ -837,39 +844,43 @@ int objstore_init(struct objfs_state *objfs)
     // if (!inodemap) {		// NULL returned
     //     dprintf("%s: malloc: inodemap\n", __func__);
     //     return -1;
+	//asd
     // }
 
 	// TODO: Check the exact code for this part
-	char temp[BLOCK_SIZE];
-	u32 check = 0, uid;
+	u32 uid;
 	for (int i = 0; i < ID_BLOCKS; i++) {
 		if (read_block(objfs, i, (char *)temp) < 0)
 			return -1;
 
 		for (u32 j = 0; j < BLOCK_SIZE / sizeof(u32); j++) {
-			uid = (u32)temp + j;					// TODO: Check the array conversion
-			if (!i) {
-				check = 1;
-				break;
-			}
-
+			uid = (u32 *)temp[j];					// TODO: Check the array conversion
 			// Restore the values to hash table
-			insert_to_hash_table(uid, i*BLOCK_SIZE/sizeof(u32));	// TODO: Implement this
+			if (uid)
+				insert_to_hash_table((i * BLOCK_SIZE/sizeof(u32) + j), uid);	// TODO: Implement this
 		}
-		if (check) break;
 	}
 
 
-	for (int i = 0; i < I_BLOCKS; i++)
-		if(read_block(objfs, (ID_BLOCKS) + i, ((char *)inodemap) + (i * BLOCK_SIZE)) < 0)
+	for (int i = 0; i < I_BLOCKS; i++) {
+		if(read_block(objfs, (ID_BLOCKS) + i, temp) < 0)
 	        return -1;
+		memcpy(((char *)inodemap) + (i * BLOCK_SIZE), temp, BLOCK_SIZE);
+	}
 
-	for (int i = 0; i < B_BLOCKS; i++)
-		if(read_block(objfs, (ID_BLOCKS) + I_BLOCKS + i, ((char *)blockmap) + (i * BLOCK_SIZE)) < 0)
+	for (int i = 0; i < B_BLOCKS; i++) {
+		if(read_block(objfs, (ID_BLOCKS) + (I_BLOCKS) + i, temp) < 0)
 	        return -1;
+		memcpy(((char *)blockmap) + (i * BLOCK_SIZE), temp, BLOCK_SIZE);
+	}
 
-	for (int i = 0; i < MAX_OBJECT; i++)
-		cachemap[i] = -1;
+	// for (int i = 0; i < MAX_OBJECT; i++)
+	// 	cachemap[i] = -1;
+	inodemap[0] &= 0xfffffffc;
+
+	// Initialize all by 1
+	for (int i = 0; i < ((1 << 2) + (1 << 5) + (1 << 7) + (1 << 11)); i++)
+		blockmap[i] = 0xffffffff;
 
 	objfs->objstore_data = hashTable;
 	dprintf("Done objstore init\n");
@@ -895,17 +906,32 @@ int objstore_destroy(struct objfs_state *objfs)
 		}
 	}
 
-	for (int i = 0; i < ID_BLOCKS; i++)
-		if(write_block(objfs, i, ((char *)objs) + (i * BLOCK_SIZE)) < 0)
-			return -1;
+	// NOTE: This to be used in the later loops
+	char *temp2;
+	malloc_4k(temp2);
+	if (!temp2)
+		return -1;
 
-	for (int i = 0; i < I_BLOCKS; i++)
-		if(write_block(objfs, (ID_BLOCKS) + i, ((char *)inodemap) + (i * BLOCK_SIZE)) < 0)
-			return -1;
 
-	for (int i = 0; i < B_BLOCKS; i++)
-		if(write_block(objfs, (ID_BLOCKS) + I_BLOCKS + i, ((char *)blockmap) + (i * BLOCK_SIZE)) < 0)
+		// TODO: whether objs or temp or what?
+	for (int i = 0; i < ID_BLOCKS; i++) {
+		if(write_block(objfs, i, temp2) < 0)
 			return -1;
+		memcpy(((char *)temp) + (i * BLOCK_SIZE), temp2, BLOCK_SIZE);
+	}
+
+	for (int i = 0; i < I_BLOCKS; i++) {
+		if(write_block(objfs, (ID_BLOCKS) + i, temp2) < 0)
+			return -1;
+		memcpy(((char *)inodemap) + (i * BLOCK_SIZE), temp2, BLOCK_SIZE);
+	}
+
+	for (int i = 0; i < B_BLOCKS; i++) {
+		if(write_block(objfs, (ID_BLOCKS) + I_BLOCKS + i, temp2) < 0)
+			return -1;
+		memcpy(((char *)blockmap) + (i * BLOCK_SIZE), temp2, BLOCK_SIZE);
+	}
+	free_4k(temp2);
 
 	obj_sync(objfs);
 	clear_hash_table(hashTable);
