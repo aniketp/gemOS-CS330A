@@ -18,6 +18,8 @@ typedef unsigned long long u64;
 typedef long long s64;
 #endif
 
+// void insert_to_disk(struct objfs_state *objfs, struct object *obj);
+
 #define MAX_OBJECT				1 << 20
 #define MAX_BLOCKS 				1 << 23
 #define MAX_INODES				1 << 20
@@ -413,6 +415,24 @@ long write_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
     return 1;
 }
 
+// As the name suggests 		// <-- put_object
+void insert_to_disk(struct objfs_state *objfs, struct object *obj){
+	// NOTE: What if I pass actually object instead of a pointer? It kinda works
+    u32 objid = obj->id;
+    u32 block_no = (B_BLOCKS) + (I_BLOCKS) + (ID_BLOCKS) + ((objid - 2) / OBJECTS_PER_BLOCK);
+
+    struct object buf[BLOCK_SIZE/sizeof(struct object)];
+    if(read_block_modified(objfs, block_no, (char *)buf) < 0)
+        return;
+
+    buf[objid] = *obj;
+	// Check does not matter here
+	write_block_modified(objfs, block_no, (char *)buf);
+
+    return;
+}
+
+
 
 void free_object_blocks(struct objfs_state* objfs, u32 ptr) {
     u32 blocks[ID_BLOCKS] = {0};
@@ -435,61 +455,75 @@ void init_object_cached(struct object *obj)
 void remove_object_cached (struct object *obj, struct objfs_state* objfs) {
 	// TODO: Modify this (Infact, this is completely wrong)
 	// TODO: Convert the numbers to macros
-	    free_inode_id(obj->id);
+    free_inode_id(obj->id);
 
-	    if (obj->blocknum) {
-	        free_object_blocks(objfs, obj->level1[0]);
-	        free_block(obj->level1[0]);
-	        if(obj->blocknum > 1024){
-	           free_object_blocks(objfs, obj->level1[1]);
-	            free_block(obj->level1[1]);
-	            if(obj->blocknum > 2048){
-	                free_object_blocks(objfs, obj->level1[2]);
-	                free_block(obj->level1[2]);
-	                if(obj->blocknum > 3072){
-	                    free_object_blocks(objfs, obj->level1[3]);
-	                    free_block(obj->level1[3]);
-	                }
-	            }
-	        }
-	    }
+	if (obj->blocknum > 3072) {
+		free_object_blocks(objfs, obj->level1[0]);
+		free_block(obj->level1[0]);
+		free_object_blocks(objfs, obj->level1[1]);
+		free_block(obj->level1[1]);
+		free_object_blocks(objfs, obj->level1[2]);
+		free_block(obj->level1[2]);
+		free_object_blocks(objfs, obj->level1[3]);
+		free_block(obj->level1[3]);
+	}
 
-	    return;
+	else if (obj->blocknum > 2048) {
+		free_object_blocks(objfs, obj->level1[0]);
+		free_block(obj->level1[0]);
+		free_object_blocks(objfs, obj->level1[1]);
+		free_block(obj->level1[1]);
+		free_object_blocks(objfs, obj->level1[2]);
+		free_block(obj->level1[2]);
+	}
+
+	else if (obj->blocknum > 1024) {
+		free_object_blocks(objfs, obj->level1[0]);
+		free_block(obj->level1[0]);
+		free_object_blocks(objfs, obj->level1[1]);
+		free_block(obj->level1[1]);
+	}
+
+	else if (obj->blocknum) {
+		free_object_blocks(objfs, obj->level1[0]);
+		free_block(obj->level1[0]);
+	}
+
+    return;
 }
 
 static int find_read_cached(struct objfs_state *objfs, struct object *obj, char *user_buf, int size, u32 offset) {
 	// Modify the arguments
-	u32 block_num_in_obj = offset / BLOCK_SIZE;
 	u32 block_num_on_disk = 0;
 	char indirect_ptr_page[1024] = {0};
 	char retchar[BLOCK_SIZE] = {0};
 
-	if(obj->blocknum < block_num_in_obj)
+	if(obj->blocknum < (offset/BLOCK_SIZE))
 		return -1;
 
 	// TODO: Confirm the order of the conditionals
-	if (block_num_in_obj < 1024) {
+	if ((offset/BLOCK_SIZE) < 1024) {
 		if(read_block_modified(objfs, obj->level1[0], indirect_ptr_page) < 0)
 			dprintf("Error in find read cahe while loading indirect page pointer\n");
-		block_num_on_disk = indirect_ptr_page[block_num_in_obj % 1024];
+		block_num_on_disk = indirect_ptr_page[(offset/BLOCK_SIZE) % 1024];
 	}
 
-	else if (block_num_in_obj < 2048) {
+	else if ((offset/BLOCK_SIZE) < 2048) {
 		if(read_block_modified(objfs, obj->level1[1], indirect_ptr_page) < 0)
 			dprintf("Error in find read cahe while loading indirect page pointer\n");
-		block_num_on_disk = indirect_ptr_page[block_num_in_obj % 1024];
+		block_num_on_disk = indirect_ptr_page[(offset/BLOCK_SIZE) % 1024];
 	}
 
-	else if (block_num_in_obj < 3072) {
+	else if ((offset/BLOCK_SIZE) < 3072) {
 		if(read_block_modified(objfs, obj->level1[2], indirect_ptr_page) < 0)
 			dprintf("Error in find read cahe while loading indirect page pointer\n");
-		block_num_on_disk = indirect_ptr_page[block_num_in_obj % 1024];
+		block_num_on_disk = indirect_ptr_page[(offset/BLOCK_SIZE) % 1024];
 	}
 
-	else if (block_num_in_obj >= 3072) {
+	else if ((offset/BLOCK_SIZE) >= 3072) {
 		if(read_block_modified(objfs, obj->level1[3], indirect_ptr_page) < 0)
 			dprintf("Error in find read cahe while loading indirect page pointer\n");
-		block_num_on_disk = indirect_ptr_page[block_num_in_obj % 1024];
+		block_num_on_disk = indirect_ptr_page[(offset/BLOCK_SIZE) % 1024];
 	}
 
 	if (read_block_modified(objfs, block_num_on_disk, retchar) < 0)
@@ -500,18 +534,95 @@ static int find_read_cached(struct objfs_state *objfs, struct object *obj, char 
 }
 
 /*Find the object in the cache and update it*/
-static int find_write_cached(struct objfs_state *objfs, struct object *obj, const char *user_buf, int size, off_t offset) {
+static int find_write_cached(struct objfs_state *objfs, struct object *obj,
+	 const char *user_buf, int size, off_t offset) {
     // check bitmaps
+	if (size < 0) return -1;
 
-    char *cache_ptr = objfs->cache + (obj->id << 12);
-    if (obj->cache_index < 0)
-    { /*Not in cache*/
-        if (read_block(objfs, obj->id, cache_ptr) < 0)
+	if (!obj->blocknum){
+        u32 new_block;
+        if ((new_block = get_new_block_no()) == 0){
+            dprintf("disk is full, find me in find write cached \n");
             return -1;
-        obj->cache_index = obj->id;
+        }
+        obj->level1[0] = new_block;
     }
-    memcpy(cache_ptr, user_buf, size);
-    return 0;
+
+	// TODO: Convert this to blockshifts
+    char indirect_ptr_page[1024] = {0};
+
+	// Here, level 1 would suffice
+    if ((offset/BLOCK_SIZE) < 1024)
+        if(read_block_modified(objfs, obj->level1[0], indirect_ptr_page) < 0)
+			return -1;
+
+    else if ((offset/BLOCK_SIZE) < 2048) {
+        if ((offset/BLOCK_SIZE) == 1024 && obj->blocknum == 1023){
+            u32 new_i_ptr_page_block = get_new_block_no();
+            if (new_i_ptr_page_block == 0){
+                // dprintf("disk is full, i am in find write cached \n");
+                return -1;
+            }
+            obj->level1[1] = new_i_ptr_page_block;
+        }
+
+        if(read_block_modified(objfs, obj->level1[1], indirect_ptr_page) < 0)
+            // dprintf("Error in find read cahe while loading indirect page pointer\n")
+            ;
+    }
+    else if ((offset/BLOCK_SIZE) < 3072) {
+        if ((offset/BLOCK_SIZE) == 2048 && obj->blocknum == 2047){
+            u32 new_i_ptr_page_block = get_new_block_no();
+            if (new_i_ptr_page_block == 0){
+                // dprintf("disk is full, i am in find write cached \n");
+                return -1;
+            }
+            obj->level1[2] = new_i_ptr_page_block;
+        }
+
+        if(read_block_modified(objfs, obj->level1[2], indirect_ptr_page) < 0)
+            return -1;
+    }
+
+    else {
+        if ((offset/BLOCK_SIZE) == 3072 && obj->blocknum == 3071){
+            u32 new_i_ptr_page_block = get_new_block_no();
+            if (new_i_ptr_page_block == 0)
+                return -1;
+
+        	obj->level1[3] = new_i_ptr_page_block;
+    	}
+
+        if(read_block_modified(objfs, obj->level1[3], indirect_ptr_page) < 0)
+            return -1;
+	}
+
+	// Till now, osset/blk_size was supposedly more than number of blocks
+    if ((offset/BLOCK_SIZE) < obj->blocknum) {
+        u32 disk_block = indirect_ptr_page[(offset/BLOCK_SIZE) % 1024];
+        char temp[BLOCK_SIZE] = {0};
+        memcpy(temp, user_buf, size);
+
+        if (read_block_modified(objfs, disk_block, temp) < 0)
+        	return -1;
+        return size;
+    }
+
+    else {
+        u32 new_block_id = get_new_block_no();
+        indirect_ptr_page[(obj->blocknum++) % 1024] = new_block_id;
+        char write_buf[BLOCK_SIZE] = {0};
+        memcpy(write_buf, user_buf, size);
+
+        if (read_block_modified(objfs, new_block_id, write_buf) < 0)
+            return -1;
+
+        obj->blocknum++;
+        insert_to_disk(objfs, obj);
+        return size;
+    }
+
+	return 0;
 }
 
 /*Sync the cached block to disk if the block was dirty*/
@@ -607,22 +718,6 @@ struct object *object_fetch(struct objfs_state *objfs, u64 objid) {
     return NULL;
 }
 
-// As the name suggests 		// <-- put_object
-void insert_to_disk(struct objfs_state *objfs, struct object *obj){
-	// NOTE: What if I pass actually object instead of a pointer? It kinda works
-    u32 objid = obj->id;
-    u32 block_no = (B_BLOCKS) + (I_BLOCKS) + (ID_BLOCKS) + ((objid - 2) / OBJECTS_PER_BLOCK);
-
-    struct object buf[BLOCK_SIZE/sizeof(struct object)];
-    if(read_block_modified(objfs, block_no, (char *)buf) < 0)
-        return;
-
-    buf[objid] = *obj;
-	// Check does not matter here
-	write_block_modified(objfs, block_no, (char *)buf);
-
-    return;
-}
 
 
 // inserts id in HashIdTable
@@ -819,7 +914,7 @@ int fillup_size_details(struct stat *buf, struct objfs_state *objfs)
    Set your private pointeri, modified you like.
 */
 int objstore_init(struct objfs_state *objfs) {
-	struct object *obj = NULL;
+	// struct object *obj = NULL;
 	c_start = NULL;
 	c_end = NULL;
 
