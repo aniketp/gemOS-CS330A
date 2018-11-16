@@ -5,7 +5,7 @@
 #include "lib.h"
 #include <stdbool.h>
 
-// #define CACHE			// This need not be placed here
+#define CACHE			// This need not be placed here
 
 typedef unsigned int u32;
 
@@ -20,8 +20,8 @@ typedef long long s64;
 
 // void insert_to_disk(struct objfs_state *objfs, struct object *obj);
 
-#define INODE_INIT		0xfffffffc
-#define BLOCK_INIT		0xffffffff
+#define INODE_INIT				0xfffffffc
+#define BLOCK_INIT				0xffffffff
 #define BLOCKMAP_SHIFT	(1 << 7) + (1 << 2) + (1 << 5) + (1 << 11)
 
 #define MAX_OBJECT				(1 << 20)
@@ -38,16 +38,19 @@ typedef long long s64;
 #define CACHE_HTSIZE 			(1 << 15)				// CACHE_HASH_TABLE_SIZE
 #define OBJECTS_PER_BLOCK 		(1 << 6)
 
+#define TWOTEN			1024
+#define TWOTWENTY		2048
+#define TWOTHIRTY		3072
 
-#define CACHE
+// #define CACHE
 
-#define malloc_custom(x, y)                                                                             \
-    do                                                                                               \
-    {                                                                                                \
-        (x) = mmap(NULL, (y) * BLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0); \
-        if ((x) == MAP_FAILED)                                                                       \
-            (x) = NULL;                                                                              \
-    } while (0);
+// #define malloc_custom(x, y)                                                                             \
+//     do                                                                                               \
+//     {                                                                                                \
+//         (x) = mmap(NULL, (y) * BLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0); \
+//         if ((x) == MAP_FAILED)                                                                       \
+//             (x) = NULL;                                                                              \
+//     } while (0);
 
 #define malloc_4k(x)                                                                             \
     do                                                                                           \
@@ -113,19 +116,16 @@ struct cache_obj *cache_left = NULL;
 struct cache_obj *cache_right = NULL;
 u32 cache_size = 0;          // number of cache blocks used
 
-void add_at_top_of_cache(struct cache_obj *new_cache_node);
-void remove_object_from_cache_and_write_back(struct cache_obj* node, struct objfs_state *objfs);
-void remove_object_from_cache_dont_write_back(struct cache_obj* node, struct objfs_state *objfs);
+// The order is messed
 void insert_block_in_cache_hash_table(u32 disk_addr, struct cache_obj* new_cache_node);
 void remove_block_from_cache_hash_table(struct cache_obj *cache_right);
 bool check_disk_block_in_cache(u32 disk_addr);
 struct cache_obj* retrieve_block_from_cache(u32 disk_addr, struct objfs_state *objfs);
 struct cache_obj *get_cache_obj(u32 disk_addr);
+void add_at_top_of_cache(struct cache_obj *new_cache_node);
+void remove_object_from_cache_dont_write_back(struct cache_obj* node, struct objfs_state *objfs);
 struct cache_obj* insert_block_to_cache(u32 disk_addr, u64 cache_addr, struct objfs_state *objfs);
-
-
-// char cachemap[1*BLOCK_SIZE];       //   MAX_CACHE_BLOCKS/2^3
-
+void remove_object_from_cache_and_write_back(struct cache_obj* node, struct objfs_state *objfs);
 
 
 u32 get_block_for_cache() {
@@ -172,7 +172,7 @@ u32 fetch_free_id() {
 }
 
 
-u32 get_new_block_no() {
+u32 fetch_free_block() {
     u32 free_id = 0;
     for (u32 i = block_bit_itr; i < (MAX_BLOCKS/8) + block_bit_itr; i++) {
 		u32 index = i % (MAX_BLOCKS/8);
@@ -253,27 +253,24 @@ void insert_to_hash_table(u32 id, u32 index) {
 
 
 #ifdef CACHE
-u32 read_block_modified(struct objfs_state *objfs, u32 block_no, char *buf)
-{
-    dprintf("in %s 1\n", __func__);
-    dprintf("request b number is : %d\n", block_no);
+u32 read_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
+	u32 obtained_id;
     struct cache_obj* new_node = retrieve_block_from_cache(block_no, objfs);
-    if(new_node == NULL)
-    {
-        void *ptr;
-        malloc_4k(ptr);
-        if(!ptr)
-            return -1;
-        u32 retval = read_block(objfs, block_no , ptr);
-        if (retval < 0) return retval;
-        memcpy(buf, ptr, BLOCK_SIZE);
-        u32 cache_id = get_block_for_cache(objfs);
+    if (new_node == NULL) {
+        void *ptr; malloc_4k(ptr);
+        if(!ptr) return -1;
 
-        memcpy( (char*)(objfs->cache) + (cache_id*BLOCK_SIZE), buf, BLOCK_SIZE );
-        struct cache_obj* new_node = insert_block_to_cache(block_no, cache_id, objfs);
+        if ((obtained_id = read_block(objfs, block_no , ptr)) < 0)
+			return -1;
+
+        memcpy(buf, ptr, BLOCK_SIZE);
+        u32 c_id = get_block_for_cache();
+
+        memcpy( (char*)(objfs->cache) + (c_id * BLOCK_SIZE), buf, BLOCK_SIZE );
+        insert_block_to_cache(block_no, c_id, objfs);
 
         free_4k(ptr) ;
-        return retval;
+        return obtained_id;
     }
 
     memcpy(buf,objfs->cache + ((new_node->cache_addr)*BLOCK_SIZE), BLOCK_SIZE);
@@ -290,17 +287,19 @@ long write_block_modified(struct objfs_state *objfs, u32 block_no, char *buf)
 		// Due to local scope, the two lines of code below need  to be repeated
         struct cache_obj* new_node = insert_block_to_cache(block_no, cache_id, objfs);
         new_node->dirty = 1;
-        return 1;
+        return 0;
     }
 
     memcpy((objfs->cache) + ((new_node->cache_addr) * BLOCK_SIZE), (void *)buf, BLOCK_SIZE);
     new_node->dirty = 1;
-    return 1;
+    return 0;
 }
 
 #else
+
 u32 read_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
-    struct cache_obj *new_node = retrieve_block_from_cache(block_no, objfs);
+	u32 obtained_id;
+	struct cache_obj *new_node = retrieve_block_from_cache(block_no, objfs);
     if(new_node == NULL) {
 		// 4k align shit
 		void *ptr; malloc_4k(ptr);
@@ -314,7 +313,7 @@ u32 read_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
 		// memcpy((char *)(objfs->cache) + (c_id * BLOCK_SIZE), buf, BLOCK_SIZE);
         insert_block_to_cache(block_no, (u64)buf, objfs);
 		free(ptr);
-        return retval;
+        return obtained_id;
     }
     memcpy(buf, (char *)(new_node->cache_addr), BLOCK_SIZE);
     return BLOCK_SIZE;
@@ -322,17 +321,19 @@ u32 read_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
 
 u32 write_block_modified(struct objfs_state *objfs, u32 block_no, char *buf) {
     struct cache_obj* new_node = retrieve_block_from_cache(block_no, objfs);
-    if(new_node == NULL)
-        struct cache_obj* new_node = insert_block_to_cache(block_no, (u64)buf, objfs);
-
+    if (new_node == NULL) {
+        struct cache_obj* new_node = insert_block_to_cache(block_no, buf, objfs);
+		// Let's repeat this piece of code so as to not mess up the ****
+		memcpy(new_node->cache_addr, buf, BLOCK_SIZE);
+		new_node->dirty = 1;
+		return 1;
+	}
     memcpy(new_node->cache_addr, buf, BLOCK_SIZE);
     new_node->dirty = 1;
     return 1;
 }
 
-
 #endif
-
 
 
 struct cache_obj*
@@ -417,8 +418,8 @@ void remove_object_from_cache_and_write_back(struct cache_obj* node,
 
 		// Copy cache_block_address to 4k ptr variable
 		memcpy(ptr, objfs->cache + (node->cache_addr * BLOCK_SIZE), BLOCK_SIZE);
-        if (write_block(objfs, node->disk_addr, (char *)ptr) < 0)
-            dprintf("Error in writing to disk: %d from cache: %d", node->disk_addr, node->cache_addr);
+        write_block(objfs, node->disk_addr, (char *)ptr);
+            // dprintf("Error in writing to disk: %d from cache: %d", node->disk_addr, node->cache_addr);
 		free_4k(ptr);
 	}
 
@@ -500,7 +501,7 @@ get_cache_obj(u32 disk_addr) {
 	return NULL;
 }
 
-// Delete the 'node' from cache hash table	// <-- remove_from_cache_hash_table
+// Delete the 'node' from cache hash table	//
 void remove_block_from_cache_hash_table(struct cache_obj *node) {
     u32 val = cache_hash(node->disk_addr);
     struct cache_obj* itr = cacheHashTable[val];
@@ -541,16 +542,17 @@ bool check_disk_block_in_cache(u32 disk_block) {
 
 
 struct object *get_object_by_id(u64 objid, struct objfs_state *objfs) {
+	u32 check = sizeof(struct object);
     u32 block_no = ((objid - 2) / OBJECTS_PER_BLOCK) + (B_BLOCKS) + (I_BLOCKS) + (ID_BLOCKS);
-    u32 block_off = ((objid - 2) % OBJECTS_PER_BLOCK) * sizeof(struct object);
+    u32 block_off = ((objid - 2) % OBJECTS_PER_BLOCK) * check;
 
-    struct object buf[BLOCK_SIZE/sizeof(struct object)];
+    struct object buf[BLOCK_SIZE/check];
     if(read_block_modified(objfs, block_no, ((char *)buf)) < 0)
         return NULL;
 
-    struct object* node = (struct object *)calloc(sizeof(struct object), 1);
+    struct object* node = (struct object *)calloc(check, 1);
 
-    *node = buf[block_off/sizeof(struct object)];
+    *node = buf[block_off/check];
     if (node->id == objid)
         return node;
 	else
@@ -591,11 +593,11 @@ void clear_hash_table(struct hashobj** hashTable) {
 
 
 void free_object_blocks(u32 ptr, struct objfs_state* objfs) {
-    u32 blocks[1024] = {0};
-    if(read_block_modified(objfs, ptr, blocks) < 0)
-        dprintf("problem in loading indirect block in remove object cached\n");
+    u32 blocks[TWOTEN] = {0};
+    read_block_modified(objfs, ptr, blocks);
+        // dprintf("problem in loading indirect block in remove object cached\n");
 
-    for( int i = 0; i < 1024; i++)
+    for( int i = 0; i < TWOTEN; i++)
         if(!blocks[i]) free_block(blocks[i]);
 }
 
@@ -613,7 +615,7 @@ void remove_object_cached (struct object *obj, struct objfs_state* objfs) {
 	// TODO: Convert the numbers to macros
     free_inode_id(obj->id);
 
-	if (obj->blocknum > 3072) {
+	if (obj->blocknum > TWOTHIRTY) {
 		free_object_blocks(objfs, obj->level1[0]);
 		free_block(obj->level1[0]);
 		free_object_blocks(objfs, obj->level1[1]);
@@ -624,7 +626,7 @@ void remove_object_cached (struct object *obj, struct objfs_state* objfs) {
 		free_block(obj->level1[3]);
 	}
 
-	else if (obj->blocknum > 2048) {
+	else if (obj->blocknum > TWOTWENTY) {
 		free_object_blocks(objfs, obj->level1[0]);
 		free_block(obj->level1[0]);
 		free_object_blocks(objfs, obj->level1[1]);
@@ -633,7 +635,7 @@ void remove_object_cached (struct object *obj, struct objfs_state* objfs) {
 		free_block(obj->level1[2]);
 	}
 
-	else if (obj->blocknum > 1024) {
+	else if (obj->blocknum > TWOTEN) {
 		free_object_blocks(objfs, obj->level1[0]);
 		free_block(obj->level1[0]);
 		free_object_blocks(objfs, obj->level1[1]);
@@ -651,41 +653,41 @@ void remove_object_cached (struct object *obj, struct objfs_state* objfs) {
 static int find_read_cached(struct objfs_state *objfs, struct object *obj, char *user_buf, int size, u32 offset)
 {
 	u32 block_offset = 0;
-	u32 level1_ptr[1024] = {0};
+	u32 level1_ptr[TWOTEN] = {0};
 	char ans[BLOCK_SIZE] = {0};
 
 	if(obj->blocknum < (offset/BLOCK_SIZE))
 		return -1;
 
-    if ((offset/BLOCK_SIZE) < 1024) {
+    if ((offset/BLOCK_SIZE) < TWOTEN) {
 
-        if(read_block_modified(objfs, obj->level1[0], (char *)level1_ptr) < 0)
-            dprintf("Error in find read cahe while loading indirect page pointer\n");
-        block_offset = level1_ptr[(offset/BLOCK_SIZE)%1024];
+        read_block_modified(objfs, obj->level1[0], (char *)level1_ptr);
+            // dprintf("Error in find read cahe while loading indirect page pointer\n");
+        block_offset = level1_ptr[(offset/BLOCK_SIZE)%TWOTEN];
     }
 
-    else if ((offset/BLOCK_SIZE) < 2048) {
+    else if ((offset/BLOCK_SIZE) < TWOTWENTY) {
 
-        if(read_block_modified(objfs, obj->level1[1], (char *)level1_ptr) < 0)
-            dprintf("Error in find read cahe while loading indirect page pointer\n");
-        block_offset = level1_ptr[(offset/BLOCK_SIZE) % 1024];
+        read_block_modified(objfs, obj->level1[1], (char *)level1_ptr);
+            // dprintf("Error in find read cahe while loading indirect page pointer\n");
+        block_offset = level1_ptr[(offset/BLOCK_SIZE) % TWOTEN];
     }
 
-    else if ((offset/BLOCK_SIZE) < 3072) {
+    else if ((offset/BLOCK_SIZE) < TWOTHIRTY) {
 
-        if(read_block_modified(objfs, obj->level1[2], (char *)level1_ptr) < 0)
-            dprintf("Error in find read cahe while loading indirect page pointer\n");
-        block_offset = level1_ptr[(offset/BLOCK_SIZE) % 1024];
+        read_block_modified(objfs, obj->level1[2], (char *)level1_ptr);
+            // dprintf("Error in find read cahe while loading indirect page pointer\n");
+        block_offset = level1_ptr[(offset/BLOCK_SIZE) % TWOTEN];
     }
 
     else {
-        if(read_block_modified(objfs, obj->level1[3], (char *)level1_ptr) < 0)
-            dprintf("Error in find read cahe while loading indirect page pointer\n");
-        block_offset = level1_ptr[(offset/BLOCK_SIZE) % 1024];
+        read_block_modified(objfs, obj->level1[3], (char *)level1_ptr);
+            // dprintf("Error in find read cahe while loading indirect page pointer\n");
+        block_offset = level1_ptr[(offset/BLOCK_SIZE) % TWOTEN];
     }
 
-    if ( read_block_modified(objfs, block_offset, ans ) < 0)
-        dprintf("Error in find read cahe while loading disk block\n");
+	read_block_modified(objfs, block_offset, ans);
+    // dprintf("Error in find read cahe while loading disk block\n");
 
     memcpy(user_buf, ans, size);
     return size;
@@ -698,23 +700,21 @@ static int find_write_cached(struct objfs_state *objfs, struct object *obj, cons
 	if (size < 0) return -1;
 
     if (!obj->blocknum) {
-        u32 new_block = get_new_block_no();
-        if (new_block == 0){
-            dprintf("disk is full, i am in find write cached \n");
-            return -1;
-        }
+        u32 new_block = fetch_free_block();
+        if (!new_block) return -1;
+            // dprintf("disk is full, i am in find write cached \n");
         obj->level1[0] = new_block;
     }
 
 
-    u32 level1_ptr[1024] = {0};
+    u32 level1_ptr[TWOTEN] = {0};
 
-    if ((offset/BLOCK_SIZE) < 1024)
+    if ((offset/BLOCK_SIZE) < TWOTEN)
         read_block_modified(objfs, obj->level1[0], (char *)level1_ptr);
 
-    else if ((offset/BLOCK_SIZE) < 2048) {
-        if ((offset/BLOCK_SIZE) == 1024 && obj->blocknum == 1023) {
-            u32 new_block = get_new_block_no();
+    else if ((offset/BLOCK_SIZE) < TWOTWENTY) {
+        if ((offset/BLOCK_SIZE) == TWOTEN && obj->blocknum == 1023) {
+            u32 new_block = fetch_free_block();
             if (new_block == 0)
                 return -1;
             obj->level1[1] = new_block;
@@ -723,9 +723,9 @@ static int find_write_cached(struct objfs_state *objfs, struct object *obj, cons
         read_block_modified(objfs, obj->level1[1], (char *)level1_ptr);
     }
 
-    else if ((offset/BLOCK_SIZE) < 3072) {
-        if ((offset/BLOCK_SIZE) == 2048 && obj->blocknum == 2047) {
-            u32 new_block = get_new_block_no();
+    else if ((offset/BLOCK_SIZE) < TWOTHIRTY) {
+        if ((offset/BLOCK_SIZE) == TWOTWENTY && obj->blocknum == 2047) {
+            u32 new_block = fetch_free_block();
             if (!new_block) return -1;
             obj->level1[2] = new_block;
         }
@@ -734,8 +734,8 @@ static int find_write_cached(struct objfs_state *objfs, struct object *obj, cons
     }
 
     else {
-        if ((offset/BLOCK_SIZE) == 3072 && obj->blocknum == 3071) {
-            u32 new_block = get_new_block_no();
+        if ((offset/BLOCK_SIZE) == TWOTHIRTY && obj->blocknum == 3071) {
+            u32 new_block = fetch_free_block();
             if (!new_block) return -1;
             obj->level1[3] = new_block;
         }
@@ -744,7 +744,7 @@ static int find_write_cached(struct objfs_state *objfs, struct object *obj, cons
     }
 
     if( (offset/BLOCK_SIZE) < obj->blocknum) {
-        u32 block_on_disk = level1_ptr[(offset/BLOCK_SIZE) % 1024];
+        u32 block_on_disk = level1_ptr[(offset/BLOCK_SIZE) % TWOTEN];
         char write_buf[BLOCK_SIZE] = {0};
         memcpy( write_buf, user_buf, size );
 
@@ -754,8 +754,8 @@ static int find_write_cached(struct objfs_state *objfs, struct object *obj, cons
     }
 
     else {
-        u32 new_block_id = get_new_block_no();
-        level1_ptr[(obj->blocknum) % 1024] = new_block_id;
+        u32 new_block_id = fetch_free_block();
+        level1_ptr[(obj->blocknum) % TWOTEN] = new_block_id;
         if(write_block_modified(objfs, obj->level1[0], (char *)level1_ptr) < 0)
 			return -1;
         obj->blocknum++;
@@ -794,8 +794,8 @@ void obj_sync(struct objfs_state *objfs) {
                 if(!ptr) return -1;
 
                 memcpy(ptr, objfs->cache + (itr->cache_addr * BLOCK_SIZE),  BLOCK_SIZE);
-                if (write_block(objfs, itr->disk_addr, (char *)ptr) < 0)
-                    dprintf("Error in writing disk_addr: %d from c_block: %d", itr->disk_addr, itr->cache_addr);
+                write_block(objfs, itr->disk_addr, (char *)ptr);
+                    // dprintf("Error in writing disk_addr: %d from c_block: %d", itr->disk_addr, itr->cache_addr);
                 free_4k(ptr);
 
             }
@@ -890,7 +890,7 @@ long create_object(const char *key, struct objfs_state *objfs) {
 
 	u32 new_id = fetch_free_id();
 	if (!new_id) {
-               dprintf("%s: objstore full: No ID found\n", __func__);
+               // dprintf("%s: objstore full: No ID found\n", __func__);
                return -1;
     }
 
@@ -958,9 +958,48 @@ long destroy_object(const char *key, struct objfs_state *objfs) {
 
 long rename_object(const char *key, const char *newname, struct objfs_state *objfs)
 {
+	u32 val = hash(key);
+	struct hashobj *temp = hashTable[val];
+	struct hashobj *itr = temp;
 
+	if (temp == NULL && itr == NULL)
+		return -1;
+
+	struct object *obj = get_object_by_id(temp->id, objfs);
+	// Remove the object at current hash
+	if (temp->id && !strcmp(obj->key, key)){
+		for (int i=0; i < 32; i++)
+			(obj->key)[i] = newname[i];
+		insert_to_hash_table(obj->id, hash(newname));
+		insert_to_disk(obj, objfs);
+		hashTable[val] = temp->next;
+		free(temp); free(obj);
+		return 0;
+	}
+
+	// Confirm if the block really exists
+	while (temp != NULL) {
+		obj = get_object_by_id(temp->id, objfs);
+		if (obj == NULL) return -1;
+
+		if (temp->id && !strcmp(obj->key, key)) {
+			for (int i=0; i < 32; i++)
+				(obj->key)[i] = newname[i];
+			insert_to_hash_table(obj->id, hash(newname));
+			insert_to_disk(obj, objfs);
+			itr->next = temp->next;
+			free(temp); free(obj);
+			return 0;
+		}
+		free(obj);
+		itr = temp;
+		temp = temp->next;
+	}
+
+	// We couldn't succeed here
 	return -1;
 }
+
 
 /*
   Writes the content of the buffer into the object with objid = objid.
@@ -991,10 +1030,24 @@ long objstore_read(int objid, char *buf, int size, struct objfs_state *objfs, of
 	struct object *obj = get_object_by_id(objid, objfs);
 	if (obj == NULL || objid < 2)
 		return -1;
+	u32 offcheck = offset;
+	u32 sizecheck = size;
 
 	dprintf("Doing read size = %d\n", size);
-    if (find_read_cached(objfs, obj, buf, size, offset) < 0)
-        return -1;
+    // if (find_read_cached(objfs, obj, buf, size, offset) < 0)
+    //     return -1;
+
+    char buffer[BLOCK_SIZE];
+
+	// Keep reading from 4k offsets until the objects are exhausted
+    while(sizecheck) {
+        if (find_read_cached(objfs, obj, buffer, ((sizecheck > (BLOCK_SIZE)) ? (BLOCK_SIZE) : sizecheck), offset) < 0)
+            return -1;
+
+        memcpy(buf + offcheck, buffer, (sizecheck > (BLOCK_SIZE)) ? BLOCK_SIZE : sizecheck);
+        offcheck = offcheck + (BLOCK_SIZE);
+        sizecheck = sizecheck - (BLOCK_SIZE);
+    }
     return size;
 }
 
