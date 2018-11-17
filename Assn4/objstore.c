@@ -5,7 +5,9 @@
 #include "lib.h"
 #include <stdbool.h>
 
-#define CACHE			// This need not be placed here
+/*
+ *#define CACHE			// This need not be placed here
+ */
 
 typedef unsigned int u32;
 
